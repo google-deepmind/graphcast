@@ -21,9 +21,8 @@ on [Google Cloud Bucket](https://console.cloud.google.com/storage/browser/dm_gra
 Full model training requires downloading the
 [ERA5](https://www.ecmwf.int/en/forecasts/datasets/reanalysis-datasets/era5)
 dataset, available from [ECMWF](https://www.ecmwf.int/). This can best be accessed
-as Zarr from [Google Cloud Public Dataset's ARCO-ERA5](https://cloud.google.com/storage/docs/public-datasets/era5)
-project -- the [`ar/` folder](https://console.cloud.google.com/storage/browser/gcp-public-data-arco-era5/ar)
-has GraphCast-ready data.
+as Zarr from [Google Cloud Public Dataset's ARCO-ERA5](https://console.cloud.google.com/storage/browser/gcp-public-data-arco-era5/ar)
+project. 
 
 ## Overview of files
 

@@ -273,10 +273,7 @@ def assign_coords(
   # below, since otherwise .assign_coords will trigger an xarray bug where
   # it tries to recreate the indexes again for the existing coordinates.
   # Can remove if/when https://github.com/pydata/xarray/issues/7885 fixed.
-  existing_jax_coords = {
-      name: coord_var for name, coord_var in x.coords.variables.items()
-      if coord_var.attrs.get(_JAX_COORD_ATTR_NAME, False)
-  }
+  existing_jax_coords = get_jax_coords(x)
   jax_coords = existing_jax_coords | jax_coords
   x = x.drop_vars(existing_jax_coords.keys())
 
@@ -315,6 +312,13 @@ def assign_coords(
     return x.rename_vars(rename_back_mapping)
   else:  # DataArray
     return x.rename(rename_back_mapping)
+
+
+def get_jax_coords(x: DatasetOrDataArray) -> Mapping[Hashable, Any]:
+  return {
+      name: coord_var
+      for name, coord_var in x.coords.variables.items()
+      if coord_var.attrs.get(_JAX_COORD_ATTR_NAME, False)}
 
 
 def assign_jax_coords(

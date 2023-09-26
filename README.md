@@ -19,7 +19,8 @@ The model weights, normalization statistics, and example inputs are available on
 
 Full model training requires downloading the
 [ERA5](https://www.ecmwf.int/en/forecasts/datasets/reanalysis-datasets/era5)
-dataset, available from [ECMWF](https://www.ecmwf.int/).
+dataset, available from [ECMWF](https://www.ecmwf.int/). This can best be
+accessed as Zarr from [Weatherbench2's ERA5 data](https://weatherbench2.readthedocs.io/en/latest/data-guide.html#era5) (see the 6h downsampled versions).
 
 ## Overview of files
 

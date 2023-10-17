@@ -91,7 +91,7 @@ def sum_per_variable_losses(
   total = xarray.concat(
       weighted_per_variable_losses.values(), dim='variable', join='exact').sum(
           'variable', skipna=False)
-  return total, per_variable_losses
+  return total, per_variable_losses  # pytype: disable=bad-return-type
 
 
 def normalized_level_weights(data: xarray.DataArray) -> xarray.DataArray:

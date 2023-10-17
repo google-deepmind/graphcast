@@ -781,7 +781,7 @@ def _unflatten_dataset(
   dataset = xarray.Dataset(data_vars)
   # Drop static coords which have dims not present in any of the data_vars.
   # See corresponding comment in _unflatten_data_array.
-  static_coord_vars = _drop_with_none_of_dims(static_coord_vars, dataset.dims)
+  static_coord_vars = _drop_with_none_of_dims(static_coord_vars, dataset.dims)  # pytype: disable=wrong-arg-types
   return assign_coords(
       dataset, coords=static_coord_vars, jax_coords=jax_coord_vars)
 

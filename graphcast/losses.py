@@ -132,6 +132,15 @@ def normalized_latitude_weights(data: xarray.DataArray) -> xarray.DataArray:
     the proportion of area covered by each of the nearest non-pole point, and we
     test for this in the test.
 
+  For a nonuniform grid
+    1. assume latitude (length N) is at cell center
+    2. compute what would be the "cell bounds" (length N+1)
+
+           | --- x --- |
+      (left)  (center) (right)
+
+    3. compute the difference, this is delta_latitude (length N)
+
   Args:
     data: `DataArray` with latitude coordinates.
   Returns:
@@ -142,9 +151,28 @@ def normalized_latitude_weights(data: xarray.DataArray) -> xarray.DataArray:
   if np.any(np.isclose(np.abs(latitude), 90.)):
     weights = _weight_for_latitude_vector_with_poles(latitude)
   else:
-    weights = _weight_for_latitude_vector_without_poles(latitude)
+    try:
+      _check_uniform_spacing_and_get_delta(latitude)
+      weights = _weight_for_latitude_vector_without_poles(latitude)
+    except ValueError:
+      weights = _unequal_weight_for_latitude_vector_without_poles(latitude)
 
   return weights / weights.mean(skipna=False)
+
+
+def _unequal_weight_for_latitude_vector_without_poles(latitude):
+  """Weights for non-uniform latitudes"""
+  delta_latitude_c = np.deg2rad(latitude).diff('lat').values
+  boundaries = np.deg2rad(latitude).values[:-1] + delta_latitude_c/2
+  left = [np.deg2rad( 90)] if latitude[0] > 0 else [np.deg2rad(-90)]
+  right= [np.deg2rad(-90)] if latitude[0] > 0 else [np.deg2rad( 90)]
+  boundaries = np.concatenate([left, boundaries, right])
+  delta_latitude = xarray.DataArray(
+    np.abs(np.sin(boundaries[:-1]) - np.sin(boundaries[1:])),
+    coords=latitude.coords,
+    dims=latitude.dims,
+  )
+  return delta_latitude
 
 
 def _weight_for_latitude_vector_without_poles(latitude):

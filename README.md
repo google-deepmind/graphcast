@@ -113,7 +113,7 @@ Copyright 2023 DeepMind Technologies Limited.
 
 ### Citation
 
-If you want to download the pdf of this [paper](https://arxiv.org/pdf/2212.12794.pdf)
+If you want to download the pdf of this [paper](https://arxiv.org/pdf/2212.12794.pdf).
 
 If you want to cite our paper, please use this bibtex in your latex:
 ```latex

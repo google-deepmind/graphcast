@@ -81,7 +81,7 @@ The one-step implementation of GraphCast architecture, is provided in
 [Python](https://www.python.org/),
 [SciPy](https://scipy.org/),
 [Tree](https://github.com/deepmind/tree),
-[Trimesh](https://github.com/mikedh/trimesh) and
+[Trimesh](https://github.com/mikedh/trimesh), and
 [XArray](https://github.com/pydata/xarray).
 
 
@@ -113,8 +113,9 @@ Copyright 2023 DeepMind Technologies Limited.
 
 ### Citation
 
-If you use this work, consider citing our [paper](https://arxiv.org/abs/2212.12794):
+If you want to download the pdf of this [paper](https://arxiv.org/pdf/2212.12794.pdf)
 
+If you want to cite our paper, please use this bibtex in your latex:
 ```latex
 @article{lam2022graphcast,
       title={GraphCast: Learning skillful medium-range global weather forecasting},
@@ -122,6 +123,7 @@ If you use this work, consider citing our [paper](https://arxiv.org/abs/2212.127
       year={2022},
       eprint={2212.12794},
       archivePrefix={arXiv},
+      journal={arXiv preprint arXiv:2212.12794},
       primaryClass={cs.LG}
 }
 ```

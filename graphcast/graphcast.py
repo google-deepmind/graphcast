@@ -26,6 +26,7 @@ a 2D mesh over latitudes and longitudes.
 """
 
 from typing import Any, Callable, Mapping, Optional
+import warnings
 
 import chex
 from graphcast import deep_typed_graph_net
@@ -69,7 +70,7 @@ PRESSURE_LEVELS = {
 
 # The list of all possible atmospheric variables. Taken from:
 # https://confluence.ecmwf.int/display/CKB/ERA5%3A+data+documentation#ERA5:datadocumentation-Table9
-ALL_ATMOSPHERIC_VARS = (
+ECMWF_ATMOSPHERIC_VARS = (
     "potential_vorticity",
     "specific_rain_water_content",
     "specific_snow_water_content",
@@ -87,6 +88,27 @@ ALL_ATMOSPHERIC_VARS = (
     "specific_cloud_ice_water_content",
     "fraction_of_cloud_cover",
 )
+
+UFS_ATMOSPHERIC_VARS = (
+    "cldfra",       # Instantaneous 3D Cloud Fraction
+    "clwmr",        # Cloud Water Mixing Ratio
+    "delz",         # Height Thickness
+    "dpres",        # Pressure Thickness
+    "dzdt",         # Vertical Wind Velocity
+    "grle",         # Graupel Mixing Ratio
+    "icmr",         # Cloud Ice Mixing Ratio
+    "nicp",         # Cloud Ice Water Number Concentration
+    "ntrnc",        # Rain Number Concentration
+    "o3mr",         # Ozone Mixing Ratio
+    "rwmr",         # Rain Water Mixing Ratio
+    "snmr",         # Snow Water Mixing Ratio
+    "spfh",         # Specific Humidity
+    "tmp",          # Temperature
+    "ugrd",         # Zonal Wind
+    "vgrd",         # Meridional Wind
+)
+
+ALL_ATMOSPHERIC_VARS = ECMWF_ATMOSPHERIC_VARS + UFS_ATMOSPHERIC_VARS
 
 TARGET_SURFACE_VARS = (
     "2m_temperature",
@@ -397,22 +419,35 @@ class GraphCast(predictor_base.Predictor):
     predictions = self(
         inputs, targets_template=targets, forcings=forcings, is_training=True)
     # Compute loss.
+
+    t2m = "2m_temperature" if "2m_temperature" in targets else "tmp2m"
+    u10m = "10m_u_component_of_wind" if "10m_u_component_of_wind" in targets else "ugrd10m"
+    v10m = "10m_v_component_of_wind" if "10m_v_component_of_wind" in targets else "vgrd10m"
+    psfc = "mean_sea_level_pressure" if "mean_sea_level_pressure" in targets else "pressfc"
+    precip = "total_precipitation_6hr" if "total_precipitation_6hr" in targets else "prateb_ave"
+    per_variable_weights = {
+        # Any variables not specified here are weighted as 1.0.
+        # A single-level variable, but an important headline variable
+        # and also one which we have struggled to get good performance
+        # on at short lead times, so leaving it weighted at 1.0, equal
+        # to the multi-level variables:
+        t2m: 1.0,
+        # New single-level variables, which we don't weight too highly
+        # to avoid hurting performance on other variables.
+        u10m: 0.1,
+        v10m: 0.1,
+        psfc: 0.1,
+        precip: 0.1,
+    }
+    for key in [t2m, u10m, v10m, psfc, precip]:
+        if key not in targets:
+            val = per_variable_weights.pop(key)
+            warnings.warn(f"Could not find {key} in targets dataset, will not add variable specific loss weighting of {val}")
+
     loss = losses.weighted_mse_per_level(
         predictions, targets,
-        per_variable_weights={
-            # Any variables not specified here are weighted as 1.0.
-            # A single-level variable, but an important headline variable
-            # and also one which we have struggled to get good performance
-            # on at short lead times, so leaving it weighted at 1.0, equal
-            # to the multi-level variables:
-            "2m_temperature": 1.0,
-            # New single-level variables, which we don't weight too highly
-            # to avoid hurting performance on other variables.
-            "10m_u_component_of_wind": 0.1,
-            "10m_v_component_of_wind": 0.1,
-            "mean_sea_level_pressure": 0.1,
-            "total_precipitation_6hr": 0.1,
-        })
+        per_variable_weights=per_variable_weights
+    )
     return loss, predictions  # pytype: disable=bad-return-type  # jax-ndarray
 
   def loss(  # pytype: disable=signature-mismatch  # jax-ndarray

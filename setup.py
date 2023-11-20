@@ -46,6 +46,7 @@ setup(
         "trimesh",
         "typing_extensions",
         "xarray",
+        "google-cloud-storage"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

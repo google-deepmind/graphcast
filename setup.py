@@ -42,7 +42,7 @@ setup(
         "pandas",
         "rtree",
         "scipy",
-        "tree",
+        "dm-tree",
         "trimesh",
         "typing_extensions",
         "xarray",

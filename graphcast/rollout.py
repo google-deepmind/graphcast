@@ -169,7 +169,11 @@ def chunked_prediction_generator(
 
     next_frame = xarray.merge([predictions, current_forcings])
 
-    current_inputs = _get_next_inputs(current_inputs, next_frame)
+    next_inputs = _get_next_inputs(current_inputs, next_frame)
+
+    # Shift timedelta coordinates, so we don't recompile at every iteration.
+    next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
+    current_inputs = next_inputs
 
     # At this point we can assign the actual targets time coordinates.
     predictions = predictions.assign_coords(time=actual_target_time)
@@ -197,14 +201,12 @@ def _get_next_inputs(
       set(next_frame.keys()).intersection(set(prev_inputs.keys())))
   next_inputs = next_frame[next_inputs_keys]
 
-  # Apply concatenate next frame with inputs, crop what we don't need and
-  # shift timedelta coordinates, so we don't recompile at every iteration.
+  # Apply concatenate next frame with inputs, crop what we don't need.
   num_inputs = prev_inputs.dims["time"]
   return (
       xarray.concat(
           [prev_inputs, next_inputs], dim="time", data_vars="different")
-      .tail(time=num_inputs)
-      .assign_coords(time=prev_inputs.coords["time"]))
+      .tail(time=num_inputs))
 
 
 def extend_targets_template(

@@ -36,6 +36,14 @@ AVG_SEC_PER_YEAR = SEC_PER_DAY * _AVG_DAY_PER_YEAR
 
 DAY_PROGRESS = "day_progress"
 YEAR_PROGRESS = "year_progress"
+_DERIVED_VARS = {
+    DAY_PROGRESS,
+    f"{DAY_PROGRESS}_sin",
+    f"{DAY_PROGRESS}_cos",
+    YEAR_PROGRESS,
+    f"{YEAR_PROGRESS}_sin",
+    f"{YEAR_PROGRESS}_cos",
+}
 
 
 def get_year_progress(seconds_since_epoch: np.ndarray) -> np.ndarray:
@@ -123,10 +131,7 @@ def featurize_progress(
 
 
 def add_derived_vars(data: xarray.Dataset) -> None:
-  """Adds year and day progress features to `data` in place.
-
-  NOTE: `toa_incident_solar_radiation` needs to be computed in this function
-  as well.
+  """Adds year and day progress features to `data` in place if missing.
 
   Args:
     data: Xarray dataset to which derived features will be added.
@@ -147,24 +152,28 @@ def add_derived_vars(data: xarray.Dataset) -> None:
   )
   batch_dim = ("batch",) if "batch" in data.dims else ()
 
-  # Add year progress features.
-  year_progress = get_year_progress(seconds_since_epoch)
-  data.update(
-      featurize_progress(
-          name=YEAR_PROGRESS, dims=batch_dim + ("time",), progress=year_progress
-      )
-  )
+  # Add year progress features if missing.
+  if YEAR_PROGRESS not in data.data_vars:
+    year_progress = get_year_progress(seconds_since_epoch)
+    data.update(
+        featurize_progress(
+            name=YEAR_PROGRESS,
+            dims=batch_dim + ("time",),
+            progress=year_progress,
+        )
+    )
 
-  # Add day progress features.
-  longitude_coord = data.coords["lon"]
-  day_progress = get_day_progress(seconds_since_epoch, longitude_coord.data)
-  data.update(
-      featurize_progress(
-          name=DAY_PROGRESS,
-          dims=batch_dim + ("time",) + longitude_coord.dims,
-          progress=day_progress,
-      )
-  )
+  # Add day progress features if missing.
+  if DAY_PROGRESS not in data.data_vars:
+    longitude_coord = data.coords["lon"]
+    day_progress = get_day_progress(seconds_since_epoch, longitude_coord.data)
+    data.update(
+        featurize_progress(
+            name=DAY_PROGRESS,
+            dims=batch_dim + ("time",) + longitude_coord.dims,
+            progress=day_progress,
+        )
+    )
 
 
 def extract_input_target_times(
@@ -287,9 +296,11 @@ def extract_inputs_targets_forcings(
   """Extracts inputs, targets and forcings according to requirements."""
   dataset = dataset.sel(level=list(pressure_levels))
 
-  # "Forcings" are derived variables and do not exist in the original ERA5 or
-  # HRES datasets. Compute them if they are not in `dataset`.
-  if not set(forcing_variables).issubset(set(dataset.data_vars)):
+  # "Forcings" include derived variables that do not exist in the original ERA5
+  # or HRES datasets, as well as other variables (e.g. tisr) that need to be
+  # computed manually for the target lead times. Compute the requested ones.
+  # TODO(octav): Compute tisr (`toa_incident_solar_radiation`) if requested.
+  if set(forcing_variables) & _DERIVED_VARS:
     add_derived_vars(dataset)
 
   # `datetime` is needed by add_derived_vars but breaks autoregressive rollouts.

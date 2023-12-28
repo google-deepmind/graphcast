@@ -179,6 +179,31 @@ class DataUtilsTest(parameterized.TestCase):
     with self.subTest("Day progress feature was added"):
       self.assertIn(data_utils.DAY_PROGRESS, all_variables)
 
+  def test_add_derived_vars_existing_vars_not_overridden(self):
+    dims = ["x", "lon", "datetime"]
+    data = xarray.Dataset(
+        data_vars={
+            "var1": (dims, 8 * np.random.randn(2, 2, 3)),
+            data_utils.YEAR_PROGRESS: (dims, np.full((2, 2, 3), 0.111)),
+            data_utils.DAY_PROGRESS: (dims, np.full((2, 2, 3), 0.222)),
+        },
+        coords={
+            "lon": np.array([0.0, 0.5]),
+            "datetime": np.array([
+                datetime.datetime(2021, 1, 1),
+                datetime.datetime(2023, 1, 1),
+                datetime.datetime(2023, 1, 3),
+            ]),
+        },
+    )
+
+    data_utils.add_derived_vars(data)
+
+    with self.subTest("Year progress feature was not overridden"):
+      np.testing.assert_allclose(data[data_utils.YEAR_PROGRESS], 0.111)
+    with self.subTest("Day progress feature was not overridden"):
+      np.testing.assert_allclose(data[data_utils.DAY_PROGRESS], 0.222)
+
   @parameterized.named_parameters(
       dict(testcase_name="missing_datetime", coord_name="lon"),
       dict(testcase_name="missing_lon", coord_name="datetime"),

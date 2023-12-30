@@ -15,6 +15,7 @@
 
 from typing import Any, Mapping, Sequence, Tuple, Union
 
+from graphcast import solar_radiation
 import numpy as np
 import pandas as pd
 import xarray
@@ -44,6 +45,7 @@ _DERIVED_VARS = {
     f"{YEAR_PROGRESS}_sin",
     f"{YEAR_PROGRESS}_cos",
 }
+TISR = "toa_incident_solar_radiation"
 
 
 def get_year_progress(seconds_since_epoch: np.ndarray) -> np.ndarray:
@@ -176,6 +178,37 @@ def add_derived_vars(data: xarray.Dataset) -> None:
     )
 
 
+def add_tisr_var(data: xarray.Dataset) -> None:
+  """Adds TISR feature to `data` in place if missing.
+
+  Args:
+    data: Xarray dataset to which TISR feature will be added.
+
+  Raises:
+    ValueError if `datetime`, 'lat', or `lon` are not in `data` coordinates.
+  """
+
+  if TISR in data.data_vars:
+    return
+
+  for coord in ("datetime", "lat", "lon"):
+    if coord not in data.coords:
+      raise ValueError(f"'{coord}' must be in `data` coordinates.")
+
+  # Remove `batch` dimension of size one if present. An error will be raised if
+  # the `batch` dimension exists and has size greater than one.
+  data_no_batch = data.squeeze("batch") if "batch" in data.dims else data
+
+  tisr = solar_radiation.get_toa_incident_solar_radiation_for_xarray(
+      data_no_batch, use_jit=True
+  )
+
+  if "batch" in data.dims:
+    tisr = tisr.expand_dims("batch", axis=0)
+
+  data.update({TISR: tisr})
+
+
 def extract_input_target_times(
     dataset: xarray.Dataset,
     input_duration: TimedeltaLike,
@@ -299,9 +332,10 @@ def extract_inputs_targets_forcings(
   # "Forcings" include derived variables that do not exist in the original ERA5
   # or HRES datasets, as well as other variables (e.g. tisr) that need to be
   # computed manually for the target lead times. Compute the requested ones.
-  # TODO(octav): Compute tisr (`toa_incident_solar_radiation`) if requested.
   if set(forcing_variables) & _DERIVED_VARS:
     add_derived_vars(dataset)
+  if set(forcing_variables) & {TISR}:
+    add_tisr_var(dataset)
 
   # `datetime` is needed by add_derived_vars but breaks autoregressive rollouts.
   dataset = dataset.drop_vars("datetime")

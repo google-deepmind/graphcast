@@ -18,7 +18,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from graphcast import data_utils
 import numpy as np
-import xarray
+import xarray as xa
 
 
 class DataUtilsTest(parameterized.TestCase):
@@ -156,7 +156,7 @@ class DataUtilsTest(parameterized.TestCase):
       )
 
   def test_add_derived_vars_variables_added(self):
-    data = xarray.Dataset(
+    data = xa.Dataset(
         data_vars={
             "var1": (["x", "lon", "datetime"], 8 * np.random.randn(2, 2, 3))
         },
@@ -181,7 +181,7 @@ class DataUtilsTest(parameterized.TestCase):
 
   def test_add_derived_vars_existing_vars_not_overridden(self):
     dims = ["x", "lon", "datetime"]
-    data = xarray.Dataset(
+    data = xa.Dataset(
         data_vars={
             "var1": (dims, 8 * np.random.randn(2, 2, 3)),
             data_utils.YEAR_PROGRESS: (dims, np.full((2, 2, 3), 0.111)),
@@ -212,7 +212,7 @@ class DataUtilsTest(parameterized.TestCase):
       self, coord_name
   ):
     with self.subTest(f"Missing {coord_name} coordinate"):
-      data = xarray.Dataset(
+      data = xa.Dataset(
           data_vars={"var1": (["x", coord_name], 8 * np.random.randn(2, 2))},
           coords={
               coord_name: np.array([0.0, 0.5]),
@@ -220,6 +220,90 @@ class DataUtilsTest(parameterized.TestCase):
       )
       with self.assertRaises(ValueError):
         data_utils.add_derived_vars(data)
+
+  def test_add_tisr_var_variable_added(self):
+    data = xa.Dataset(
+        data_vars={
+            "var1": (["time", "lat", "lon"], np.full((2, 2, 2), 8.0))
+        },
+        coords={
+            "lat": np.array([2.0, 1.0]),
+            "lon": np.array([0.0, 0.5]),
+            "time": np.array([100, 200], dtype="timedelta64[s]"),
+            "datetime": xa.Variable(
+                "time", np.array([10, 20], dtype="datetime64[D]")
+            ),
+        },
+    )
+
+    data_utils.add_tisr_var(data)
+
+    self.assertIn(data_utils.TISR, set(data.variables))
+
+  def test_add_tisr_var_existing_var_not_overridden(self):
+    dims = ["time", "lat", "lon"]
+    data = xa.Dataset(
+        data_vars={
+            "var1": (dims, np.full((2, 2, 2), 8.0)),
+            data_utils.TISR: (dims, np.full((2, 2, 2), 1200.0)),
+        },
+        coords={
+            "lat": np.array([2.0, 1.0]),
+            "lon": np.array([0.0, 0.5]),
+            "time": np.array([100, 200], dtype="timedelta64[s]"),
+            "datetime": xa.Variable(
+                "time", np.array([10, 20], dtype="datetime64[D]")
+            ),
+        },
+    )
+
+    data_utils.add_derived_vars(data)
+
+    np.testing.assert_allclose(data[data_utils.TISR], 1200.0)
+
+  def test_add_tisr_var_works_with_batch_dim_size_one(self):
+    data = xa.Dataset(
+        data_vars={
+            "var1": (
+                ["batch", "time", "lat", "lon"],
+                np.full((1, 2, 2, 2), 8.0),
+            )
+        },
+        coords={
+            "lat": np.array([2.0, 1.0]),
+            "lon": np.array([0.0, 0.5]),
+            "time": np.array([100, 200], dtype="timedelta64[s]"),
+            "datetime": xa.Variable(
+                ("batch", "time"), np.array([[10, 20]], dtype="datetime64[D]")
+            ),
+        },
+    )
+
+    data_utils.add_tisr_var(data)
+
+    self.assertIn(data_utils.TISR, set(data.variables))
+
+  def test_add_tisr_var_fails_with_batch_dim_size_greater_than_one(self):
+    data = xa.Dataset(
+        data_vars={
+            "var1": (
+                ["batch", "time", "lat", "lon"],
+                np.full((2, 2, 2, 2), 8.0),
+            )
+        },
+        coords={
+            "lat": np.array([2.0, 1.0]),
+            "lon": np.array([0.0, 0.5]),
+            "time": np.array([100, 200], dtype="timedelta64[s]"),
+            "datetime": xa.Variable(
+                ("batch", "time"),
+                np.array([[10, 20], [100, 200]], dtype="datetime64[D]"),
+            ),
+        },
+    )
+
+    with self.assertRaisesRegex(ValueError, r"cannot select a dimension"):
+      data_utils.add_tisr_var(data)
 
 
 if __name__ == "__main__":

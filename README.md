@@ -60,6 +60,9 @@ The one-step implementation of GraphCast architecture, is provided in
     and all of the wrappers implement.
 *   `rollout.py`: Similar to `autoregressive.py` but used only at inference time
     using a python loop to produce longer, but non-differentiable trajectories.
+*   `solar_radiation.py`: Computes Top-Of-the-Atmosphere (TOA) incident solar
+    radiation compatible with ERA5. This is used as a forcing variable and thus
+    needs to be computed for target lead times in an operational setting.
 *   `typed_graph.py`: Definition of `TypedGraph`'s.
 *   `typed_graph_net.py`: Implementation of simple graph neural network
     building blocks defined over `TypedGraph`'s that can be combined to build

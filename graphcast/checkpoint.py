@@ -146,7 +146,7 @@ def _convert_types(typ: type[_T], value: Any) -> _T:
     return [_convert_types(value_type, v)
             for _, v in sorted(value.items(), key=lambda x: int(x[0]))]
 
-  if base_type is tuple:
+  if (base_type is tuple) and not isinstance(value, np.ndarray):
     if len(typ.__args__) == 2 and typ.__args__[1] == ...:
       # An arbitrary length tuple of a single type, eg: tuple[int, ...]
       value_type = typ.__args__[0]

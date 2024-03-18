@@ -124,7 +124,7 @@ class InputsAndResiduals(predictor_base.Predictor):
       # A prediction for which we have a corresponding input -- we are
       # predicting the residual:
       last_input = inputs[norm_prediction.name].isel(time=-1)
-      prediction += last_input
+      prediction = prediction + last_input
       return prediction
     else:
       # A predicted variable which is not an input variable. We are predicting
@@ -139,7 +139,7 @@ class InputsAndResiduals(predictor_base.Predictor):
     if target.name in inputs:
       target_residual = target
       last_input = inputs[target.name].isel(time=-1)
-      target_residual -= last_input
+      target_residual = target_residual - last_input
       return normalize(
           target_residual, self._residual_scales, self._residual_locations)
     else:

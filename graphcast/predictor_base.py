@@ -128,7 +128,7 @@ class Predictor(abc.ABC):
     del targets, forcings, optional_kwargs
     batch_size = inputs.sizes['batch']
     dummy_loss = xarray_jax.DataArray(jnp.zeros(batch_size), dims=('batch',))
-    return dummy_loss, {}
+    return dummy_loss, {}  # pytype: disable=bad-return-type
 
   def loss_and_predictions(
       self,

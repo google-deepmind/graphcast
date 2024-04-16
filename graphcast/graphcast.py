@@ -442,7 +442,7 @@ class GraphCast(predictor_base.Predictor):
     for key in [t2m, u10m, v10m, psfc, precip]:
         if key not in targets:
             val = per_variable_weights.pop(key)
-            warnings.warn(f"Could not find {key} in targets dataset, will not add variable specific loss weighting of {val}")
+            #warnings.warn(f"Could not find {key} in targets dataset, will not add variable specific loss weighting of {val}")
 
     loss = losses.weighted_mse_per_level(
         predictions, targets,

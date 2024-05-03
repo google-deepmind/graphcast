@@ -163,6 +163,8 @@ class TaskConfig:
   forcing_variables: tuple[str, ...]
   pressure_levels: tuple[int, ...]
   input_duration: str
+  longitude: Optional[tuple[float, ...] | None] = None
+  latitude: Optional[tuple[float, ...] | None] = None
 
 TASK = TaskConfig(
     input_variables=(

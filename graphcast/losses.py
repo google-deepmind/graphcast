@@ -84,8 +84,8 @@ def stacked_mse(
         loss *= weights
 
     # recall prediction shape is (samples (batch), lat, lon, channels)
-    loss_per_sample_channel = loss.mean(axis=latlon)
-    loss_per_sample = loss_per_sample_channel.mean(axis=-1)
+    loss_per_sample_channel = loss.sum(axis=latlon)
+    loss_per_sample = loss_per_sample_channel.sum(axis=-1)
     return loss_per_sample, loss_per_sample_channel
 
 

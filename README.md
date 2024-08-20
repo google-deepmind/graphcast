@@ -1,6 +1,6 @@
 # GraphCast: Learning skillful medium-range global weather forecasting
 
-This package contains example code to run and train [GraphCast](https://arxiv.org/abs/2212.12794).
+This package contains example code to run and train [GraphCast](https://www.science.org/doi/10.1126/science.adi2336).
 It also provides three pretrained models:
 
 1.  `GraphCast`, the high-resolution model used in the GraphCast paper (0.25 degree
@@ -117,15 +117,17 @@ Copyright 2023 DeepMind Technologies Limited.
 
 ### Citation
 
-If you use this work, consider citing our [paper](https://arxiv.org/abs/2212.12794):
+If you use this work, consider citing our paper ([blog post](https://deepmind.google/discover/blog/graphcast-ai-model-for-faster-and-more-accurate-global-weather-forecasting/), [Science](https://www.science.org/doi/10.1126/science.adi2336), [arXiv](https://arxiv.org/abs/2212.12794)):
 
 ```latex
-@article{lam2022graphcast,
-      title={GraphCast: Learning skillful medium-range global weather forecasting},
-      author={Remi Lam and Alvaro Sanchez-Gonzalez and Matthew Willson and Peter Wirnsberger and Meire Fortunato and Alexander Pritzel and Suman Ravuri and Timo Ewalds and Ferran Alet and Zach Eaton-Rosen and Weihua Hu and Alexander Merose and Stephan Hoyer and George Holland and Jacklynn Stott and Oriol Vinyals and Shakir Mohamed and Peter Battaglia},
-      year={2022},
-      eprint={2212.12794},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+@article{lam2023learning,
+  title={Learning skillful medium-range global weather forecasting},
+  author={Lam, Remi and Sanchez-Gonzalez, Alvaro and Willson, Matthew and Wirnsberger, Peter and Fortunato, Meire and Alet, Ferran and Ravuri, Suman and Ewalds, Timo and Eaton-Rosen, Zach and Hu, Weihua and others},
+  journal={Science},
+  volume={382},
+  number={6677},
+  pages={1416--1421},
+  year={2023},
+  publisher={American Association for the Advancement of Science}
 }
 ```

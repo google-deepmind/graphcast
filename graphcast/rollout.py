@@ -13,11 +13,12 @@
 # limitations under the License.
 """Utils for rolling out models."""
 
-from typing import Iterator
+from typing import Iterator, Optional, Sequence
 
 from absl import logging
 import chex
 import dask.array
+from graphcast import xarray_jax
 from graphcast import xarray_tree
 import jax
 import numpy as np
@@ -35,6 +36,170 @@ class PredictorFn(typing_extensions.Protocol):
       **optional_kwargs,
       ) -> xarray.Dataset:
     ...
+
+
+def _replicate_dataset(
+    data: xarray.Dataset, replica_dim: str,
+    replicate_to_device: bool,
+    devices: Sequence[jax.Device],
+    ) -> xarray.Dataset:
+  """Used to prepare for xarray_jax.pmap."""
+
+  def replicate_variable(variable: xarray.Variable) -> xarray.Variable:
+    if replica_dim in variable.dims:
+      # TODO(pricei): call device_put_replicated when replicate_to_device==True
+      return variable.transpose(replica_dim, ...)
+    else:
+      data = len(devices) * [variable.data]
+      if replicate_to_device:
+        assert devices is not None
+        # TODO(pricei): Refactor code to use "device_put_replicated" instead of
+        # device_put_sharded.
+        data = jax.device_put_sharded(data, devices)
+      else:
+        data = np.stack(data, axis=0)
+      return xarray_jax.Variable(
+          data=data, dims=(replica_dim,) + variable.dims, attrs=variable.attrs
+      )
+
+  def replicate_dataset(dataset: xarray.Dataset) -> xarray.Dataset:
+    if dataset is None:
+      return None
+    data_variables = {
+        name: replicate_variable(var)
+        for name, var in dataset.data_vars.variables.items()
+    }
+    coords = {name: coord.variable for name, coord in dataset.coords.items()}
+    return xarray.Dataset(data_variables, coords=coords, attrs=dataset.attrs)
+
+  return replicate_dataset(data)
+
+
+def chunked_prediction_generator_multiple_runs(
+    predictor_fn: PredictorFn,
+    rngs: chex.PRNGKey,
+    inputs: xarray.Dataset,
+    targets_template: xarray.Dataset,
+    forcings: Optional[xarray.Dataset],
+    num_samples: Optional[int],
+    pmap_devices: Optional[Sequence[jax.Device]] = None,
+    **chunked_prediction_kwargs,
+) -> Iterator[xarray.Dataset]:
+  """Outputs a trajectory of multiple samples by yielding chunked predictions.
+
+  Args:
+    predictor_fn: Function to use to make predictions for each chunk.
+    rngs: RNG sequence to be used for each ensemble member.
+    inputs: Inputs for the model.
+    targets_template: Template for the target prediction, requires targets
+        equispaced in time.
+    forcings: Optional forcing for the model.
+    num_samples: The number of runs / samples to rollout.
+    pmap_devices: List of devices over which predictor_fn is pmapped, or None if
+      it is not pmapped.
+    **chunked_prediction_kwargs:
+      See chunked_prediction, some of these are required arguments.
+
+  Yields:
+    The predictions for each chunked step of the chunked rollout, such that
+    if all predictions are concatenated in time and sample dimension squeezed,
+    this would match the targets template in structure.
+
+  """
+  if pmap_devices is not None:
+    assert (
+        num_samples % jax.device_count() == 0
+    ), "num_samples must be a multiple of jax.device_count()"
+
+    def predictor_fn_pmap_named_args(rng, inputs, targets_template, forcings):
+      targets_template = _replicate_dataset(
+          targets_template,
+          replica_dim="sample",
+          replicate_to_device=True,
+          devices=pmap_devices,
+      )
+      return predictor_fn(rng, inputs, targets_template, forcings)
+
+    for i in range(0, num_samples, jax.device_count()):
+      sample_idx = slice(i, i + jax.device_count())
+      logging.info("Samples %s out of %s", sample_idx, num_samples)
+      logging.flush()
+      sample_group_rngs = rngs[sample_idx]
+
+      if "sample" not in inputs.dims:
+        sample_inputs = inputs
+      else:
+        sample_inputs = inputs.isel(sample=sample_idx, drop=True)
+
+      sample_inputs = _replicate_dataset(
+          sample_inputs,
+          replica_dim="sample",
+          replicate_to_device=True,
+          devices=pmap_devices,
+      )
+
+      if forcings is not None:
+        if "sample" not in forcings.dims:
+          sample_forcings = forcings
+        else:
+          sample_forcings = forcings.isel(sample=sample_idx, drop=True)
+
+        # TODO(pricei): We are replicating the full forcings for all rollout
+        # timesteps here, rather than inside `predictor_fn_pmap_named_args` like
+        # the targets_template above, because the forcings are concatenated with
+        # the inputs which will already be replicated. We should refactor this
+        # so that chunked prediction is aware of whether it is being run with
+        # pmap, and if so do the replication and device_put only of the
+        # necessary timesteps, as part of the chunked prediction function.
+        sample_forcings = _replicate_dataset(
+            sample_forcings,
+            replica_dim="sample",
+            replicate_to_device=False,
+            devices=pmap_devices,
+        )
+      else:
+        sample_forcings = None
+
+      for prediction_chunk in chunked_prediction_generator(
+          predictor_fn=predictor_fn_pmap_named_args,
+          rng=sample_group_rngs,
+          inputs=sample_inputs,
+          targets_template=targets_template,
+          forcings=sample_forcings,
+          pmap_devices=pmap_devices,
+          **chunked_prediction_kwargs,
+      ):
+        prediction_chunk.coords["sample"] = np.arange(
+            sample_idx.start, sample_idx.stop, sample_idx.step
+        )
+        yield prediction_chunk
+        del prediction_chunk
+  else:
+    for i in range(num_samples):
+      logging.info("Sample %d/%d", i, num_samples)
+      logging.flush()
+      this_sample_rng = rngs[i]
+
+      if "sample" in inputs.dims:
+        sample_inputs = inputs.isel(sample=i, drop=True)
+      else:
+        sample_inputs = inputs
+
+      sample_forcings = forcings
+      if sample_forcings is not None:
+        if "sample" in sample_forcings.dims:
+          sample_forcings = sample_forcings.isel(sample=i, drop=True)
+
+      for prediction_chunk in chunked_prediction_generator(
+          predictor_fn=predictor_fn,
+          rng=this_sample_rng,
+          inputs=sample_inputs,
+          targets_template=targets_template,
+          forcings=sample_forcings,
+          **chunked_prediction_kwargs):
+        prediction_chunk.coords["sample"] = i
+        yield prediction_chunk
+        del prediction_chunk
 
 
 def chunked_prediction(
@@ -85,6 +250,7 @@ def chunked_prediction_generator(
     forcings: xarray.Dataset,
     num_steps_per_chunk: int = 1,
     verbose: bool = False,
+    pmap_devices: Optional[Sequence[jax.Device]] = None
 ) -> Iterator[xarray.Dataset]:
   """Outputs a long trajectory by yielding chunked predictions.
 
@@ -99,6 +265,8 @@ def chunked_prediction_generator(
         at each call of `predictor_fn`. It must evenly divide the number of
         steps in `targets_template`.
     verbose: Whether to log the current chunk being predicted.
+    pmap_devices: List of devices over which predictor_fn is pmapped, or None if
+      it is not pmapped.
 
   Yields:
     The predictions for each chunked step of the chunked rollout, such as
@@ -140,6 +308,19 @@ def chunked_prediction_generator(
       time=slice(0, num_steps_per_chunk))
 
   current_inputs = inputs
+
+  def split_rng_fn(rng):
+    # Note, this is *not* equivalent to `return jax.random.split(rng)`, because
+    # by assigning to a tuple, the single numpy array returned by
+    # `jax.random.split` actually gets split into two arrays, so when calling
+    # the function with pmap the output is Tuple[Array, Array], where the
+    # leading axis of each array is `num devices`.
+    rng1, rng2 = jax.random.split(rng)
+    return rng1, rng2
+
+  if pmap_devices is not None:
+    split_rng_fn = jax.pmap(split_rng_fn, devices=pmap_devices)
+
   for chunk_index in range(num_chunks):
     if verbose:
       logging.info("Chunk %d/%d", chunk_index, num_chunks)
@@ -160,12 +341,23 @@ def chunked_prediction_generator(
     current_forcings = current_forcings.assign_coords(time=targets_chunk_time)
     current_forcings = current_forcings.compute()
     # Make predictions for the chunk.
-    rng, this_rng = jax.random.split(rng)
+    rng, this_rng = split_rng_fn(rng)
     predictions = predictor_fn(
         rng=this_rng,
         inputs=current_inputs,
         targets_template=current_targets_template,
         forcings=current_forcings)
+
+    # In the pmapped case, profiling reveals that the predictions, forcings and
+    # inputs are all copied onto a single TPU, causing OOM. To avoid this
+    # we pull all of the input/output data off the devices. This will have
+    # some performance impact, but maximise the memory efficiency.
+    # TODO(aelkadi): Pmap `_get_next_inputs` when running under pmap, and
+    # remove the device_get.
+    if pmap_devices is not None:
+      predictions = jax.device_get(predictions)
+      current_forcings = jax.device_get(current_forcings)
+      current_inputs = jax.device_get(current_inputs)
 
     next_frame = xarray.merge([predictions, current_forcings])
 

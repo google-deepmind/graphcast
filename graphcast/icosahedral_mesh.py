@@ -279,3 +279,7 @@ def faces_to_edges(faces: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
   senders = np.concatenate([faces[:, 0], faces[:, 1], faces[:, 2]])
   receivers = np.concatenate([faces[:, 1], faces[:, 2], faces[:, 0]])
   return senders, receivers
+
+
+def get_last_triangular_mesh_for_sphere(splits: int) -> TriangularMesh:
+  return get_hierarchy_of_triangular_meshes_for_sphere(splits=splits)[-1]

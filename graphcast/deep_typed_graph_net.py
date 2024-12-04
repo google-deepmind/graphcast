@@ -34,14 +34,20 @@ Generalization to TypedGraphs of the deep Graph Neural Network from:
 }
 """
 
-from typing import Mapping, Optional
+import functools
+from typing import Callable, List, Mapping, Optional, Tuple
 
+import chex
+from graphcast import mlp as mlp_builder
 from graphcast import typed_graph
 from graphcast import typed_graph_net
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import jraph
+
+
+GraphToGraphNetwork = Callable[[typed_graph.TypedGraph], typed_graph.TypedGraph]
 
 
 class DeepTypedGraphNet(hk.Module):
@@ -87,6 +93,7 @@ class DeepTypedGraphNet(hk.Module):
                edge_output_size: Optional[Mapping[str, int]] = None,
                include_sent_messages_in_node_update: bool = False,
                use_layer_norm: bool = True,
+               use_norm_conditioning: bool = False,
                activation: str = "relu",
                f32_aggregation: bool = False,
                aggregate_edges_for_nodes_fn: str = "segment_sum",
@@ -114,6 +121,18 @@ class DeepTypedGraphNet(hk.Module):
       include_sent_messages_in_node_update: Whether to include pooled sent
           messages from each node in the node update.
       use_layer_norm: Whether it uses layer norm or not.
+      use_norm_conditioning: If True, the latent feaures outputted by the
+        activation normalization that follows the MLPs (e.g. LayerNorm), rather
+        than being scaled/offset by learned  parameters of the normalization
+        module, will be scaled/offset by offsets/biases produced by a linear
+        layer (with different weights for each MLP), which takes an extra
+        argument "global_norm_conditioning". This argument is used to condition
+        the normalization of all nodes and all edges (hence global), and would
+        usually only have a batch and feature axis. This is typically used to
+        condition diffusion models on the "diffusion time". Will raise an error
+        if this is set to True but the "global_norm_conditioning" is not passed
+        to the __call__ method, as well as if this is set to False, but
+        "global_norm_conditioning" is passed to the call method.
       activation: name of activation function.
       f32_aggregation: Use float32 in the edge aggregation.
       aggregate_edges_for_nodes_fn: function used to aggregate messages to each
@@ -141,9 +160,14 @@ class DeepTypedGraphNet(hk.Module):
     self._edge_output_size = edge_output_size
     self._include_sent_messages_in_node_update = (
         include_sent_messages_in_node_update)
+    if use_norm_conditioning and not use_layer_norm:
+      raise ValueError(
+          "`norm_conditioning` can only be used when "
+          "`use_layer_norm` is true."
+      )
     self._use_layer_norm = use_layer_norm
+    self._use_norm_conditioning = use_norm_conditioning
     self._activation = _get_activation_fn(activation)
-    self._initialized = False
     self._f32_aggregation = f32_aggregation
     self._aggregate_edges_for_nodes_fn = _get_aggregate_edges_for_nodes_fn(
         aggregate_edges_for_nodes_fn)
@@ -154,24 +178,31 @@ class DeepTypedGraphNet(hk.Module):
       assert aggregate_edges_for_nodes_fn == "segment_sum"
 
   def __call__(self,
-               input_graph: typed_graph.TypedGraph) -> typed_graph.TypedGraph:
+               input_graph: typed_graph.TypedGraph,
+               global_norm_conditioning: Optional[chex.Array] = None
+               ) -> typed_graph.TypedGraph:
     """Forward pass of the learnable dynamics model."""
-    self._networks_builder(input_graph)
+    embedder_network, processor_networks, decoder_network = (
+        self._networks_builder(input_graph, global_norm_conditioning)
+    )
 
     # Embed input features (if applicable).
-    latent_graph_0 = self._embed(input_graph)
+    latent_graph_0 = self._embed(input_graph, embedder_network)
 
     # Do `m` message passing steps in the latent graphs.
-    latent_graph_m = self._process(latent_graph_0)
+    latent_graph_m = self._process(latent_graph_0, processor_networks)
 
     # Compute outputs from the last latent graph (if applicable).
-    return self._output(latent_graph_m)
+    return self._output(latent_graph_m, decoder_network)
 
-  def _networks_builder(self, graph_template):
-    if self._initialized:
-      return
-    self._initialized = True
-
+  def _networks_builder(
+      self,
+      graph_template: typed_graph.TypedGraph,
+      global_norm_conditioning: Optional[chex.Array] = None,
+  ) -> Tuple[
+      GraphToGraphNetwork, List[GraphToGraphNetwork], GraphToGraphNetwork
+  ]:
+    # TODO(aelkadi): move to mlp_builder.
     def build_mlp(name, output_size):
       mlp = hk.nets.MLP(
           output_sizes=[self._mlp_hidden_size] * self._mlp_num_hidden_layers + [
@@ -180,11 +211,40 @@ class DeepTypedGraphNet(hk.Module):
 
     def build_mlp_with_maybe_layer_norm(name, output_size):
       network = build_mlp(name, output_size)
+      stages = [network]
+      if self._use_norm_conditioning:
+        if global_norm_conditioning is None:
+          raise ValueError(
+              "When using norm conditioning, `global_norm_conditioning` must"
+              "be passed to the call method.")
+        # If using norm conditioning, it is no longer the responsibility of the
+        # LayerNorm module itself to learn its scale and offset. These will be
+        # learned for the module by the norm conditioning layer instead.
+        create_scale = create_offset = False
+      else:
+        if global_norm_conditioning is not None:
+          raise ValueError(
+              "`globa_norm_conditioning` was passed, but `norm_conditioning`"
+              " is not enabled.")
+        create_scale = create_offset = True
+
       if self._use_layer_norm:
         layer_norm = hk.LayerNorm(
-            axis=-1, create_scale=True, create_offset=True,
+            axis=-1, create_scale=create_scale, create_offset=create_offset,
             name=name + "_layer_norm")
-        network = hk.Sequential([network, layer_norm])
+        stages.append(layer_norm)
+
+      if self._use_norm_conditioning:
+        norm_conditioning_layer = mlp_builder.LinearNormConditioning(
+            name=name + "_norm_conditioning")
+        norm_conditioning_layer = functools.partial(
+            norm_conditioning_layer,
+            # Broadcast to the node/edge axis.
+            norm_conditioning=global_norm_conditioning[None],
+        )
+        stages.append(norm_conditioning_layer)
+
+      network = hk.Sequential(stages)
       return jraph.concatenated_args(network)
 
     # The embedder graph network independently embeds edge and node features.
@@ -208,7 +268,7 @@ class DeepTypedGraphNet(hk.Module):
         embed_edge_fn=embed_edge_fn,
         embed_node_fn=embed_node_fn,
     )
-    self._embedder_network = typed_graph_net.GraphMapFeatures(
+    embedder_network = typed_graph_net.GraphMapFeatures(
         **embedder_kwargs)
 
     if self._f32_aggregation:
@@ -232,9 +292,9 @@ class DeepTypedGraphNet(hk.Module):
     # that update the node and edge latent features.
     # Note that we can use `modules.InteractionNetwork` because
     # it also outputs the messages as updated edge latent features.
-    self._processor_networks = []
+    processor_networks = []
     for step_i in range(self._num_message_passing_steps):
-      self._processor_networks.append(
+      processor_networks.append(
           typed_graph_net.InteractionNetwork(
               update_edge_fn=_build_update_fns_for_edge_types(
                   build_mlp_with_maybe_layer_norm,
@@ -259,11 +319,15 @@ class DeepTypedGraphNet(hk.Module):
         embed_node_fn=_build_update_fns_for_node_types(
             build_mlp, graph_template, "decoder_nodes_", self._node_output_size)
         if self._node_output_size else None,)
-    self._output_network = typed_graph_net.GraphMapFeatures(
+    output_network = typed_graph_net.GraphMapFeatures(
         **output_kwargs)
+    return embedder_network, processor_networks, output_network
 
   def _embed(
-      self, input_graph: typed_graph.TypedGraph) -> typed_graph.TypedGraph:
+      self,
+      input_graph: typed_graph.TypedGraph,
+      embedder_network: GraphToGraphNetwork,
+  ) -> typed_graph.TypedGraph:
     """Embeds the input graph features into a latent graph."""
 
     # Copy the context to all of the node types, if applicable.
@@ -286,11 +350,14 @@ class DeepTypedGraphNet(hk.Module):
           context=input_graph.context._replace(features=()))
 
     # Embeds the node and edge features.
-    latent_graph_0 = self._embedder_network(input_graph)
+    latent_graph_0 = embedder_network(input_graph)
     return latent_graph_0
 
   def _process(
-      self, latent_graph_0: typed_graph.TypedGraph) -> typed_graph.TypedGraph:
+      self,
+      latent_graph_0: typed_graph.TypedGraph,
+      processor_networks: List[GraphToGraphNetwork],
+  ) -> typed_graph.TypedGraph:
     """Processes the latent graph with several steps of message passing."""
 
     # Do `num_message_passing_steps` with each of the `self._processor_networks`
@@ -298,7 +365,7 @@ class DeepTypedGraphNet(hk.Module):
     # times.
     latent_graph = latent_graph_0
     for unused_repetition_i in range(self._num_processor_repetitions):
-      for processor_network in self._processor_networks:
+      for processor_network in processor_networks:
         latent_graph = self._process_step(processor_network, latent_graph)
 
     return latent_graph
@@ -326,10 +393,13 @@ class DeepTypedGraphNet(hk.Module):
         nodes=nodes_with_residuals, edges=edges_with_residuals)
     return latent_graph_k
 
-  def _output(self,
-              latent_graph: typed_graph.TypedGraph) -> typed_graph.TypedGraph:
+  def _output(
+      self,
+      latent_graph: typed_graph.TypedGraph,
+      output_network: GraphToGraphNetwork,
+  ) -> typed_graph.TypedGraph:
     """Produces the output from the latent graph."""
-    return self._output_network(latent_graph)
+    return output_network(latent_graph)
 
 
 def _build_update_fns_for_node_types(

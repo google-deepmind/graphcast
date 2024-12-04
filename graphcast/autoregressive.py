@@ -246,7 +246,7 @@ class Predictor(predictor_base.Predictor):
         return x + self._noise_level * jax.random.normal(
             hk.next_rng_key(), shape=x.shape)
       # Add noise to time-dependent variables of the inputs.
-      inputs = jax.tree_map(add_noise, inputs)
+      inputs = jax.tree.map(add_noise, inputs)
 
     # The per-timestep targets passed by scan to one_step_loss below will have
     # no leading time axis. We need a treedef without the time axis to use

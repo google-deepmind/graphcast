@@ -140,7 +140,7 @@ def _all_inputs_to_bfloat16(
                xarray.Dataset,
                xarray.Dataset]:
   return (inputs.astype(jnp.bfloat16),
-          jax.tree_map(lambda x: x.astype(jnp.bfloat16), targets),
+          jax.tree.map(lambda x: x.astype(jnp.bfloat16), targets),
           forcings.astype(jnp.bfloat16))
 
 
@@ -149,7 +149,7 @@ def tree_map_cast(inputs: PyTree, input_dtype: np.dtype, output_dtype: np.dtype,
   def cast_fn(x):
     if x.dtype == input_dtype:
       return x.astype(output_dtype)
-  return jax.tree_map(cast_fn, inputs)
+  return jax.tree.map(cast_fn, inputs)
 
 
 @contextlib.contextmanager

@@ -21,7 +21,7 @@ description = (
 
 setup(
     name="graphcast",
-    version="0.1.1",
+    version="0.2.0.dev",
     description=description,
     long_description=description,
     author="DeepMind",
@@ -34,6 +34,7 @@ setup(
         "chex",
         "colabtools",
         "dask",
+        "dinosaur-dycore",
         "dm-haiku",
         "dm-tree",
         "jax",
@@ -46,6 +47,7 @@ setup(
         "trimesh",
         "typing_extensions",
         "xarray",
+        "xarray_tensorstore"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

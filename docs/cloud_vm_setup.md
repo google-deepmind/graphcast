@@ -68,7 +68,7 @@ This document describes how to run `gencast_demo_cloud_vm.ipynb` through [Colabo
   this originates from the attention mechanisms being algebraically equivalent, but
   not numerically equivalent. For reference, a scorecard comparing GenCast
   forecasts produced on a TPUv4 with `splash attention` vs. on a H100 with `triblockdiag_mha`
-  can be found in [docs/](https://github.com/google-deepmind/graphcast/docs/GenCast_0p25deg_accelerator_scorecard.png).
+  can be found in [docs/](https://github.com/google-deepmind/graphcast/blob/main/docs/GenCast_0p25deg_accelerator_scorecard.png).
   Note that this scorecard differs from those found in the GenCast paper
   in a number of ways:
     - 8 member ensembles (vs. 50 in the paper)

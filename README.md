@@ -74,7 +74,7 @@ from 1979 to 2018, and can be causally evaluated on 2019 and later years.
 This model has the smallest memory footprint of those provided and has been
 provided to enable low cost demonstrations (for example, it is runnable in a free Colab notebook).
 While its performance is reasonable, it is not representative of the performance
-of the GenCast models (1-3) above. For reference, a scorecard comparing its performance to ENS can be found in [docs/](https://github.com/google-deepmind/graphcast/docs/GenCast_1p0deg_Mini_ENS_scorecard.png). Note that in this scorecard,
+of the GenCast models (1-3) above. For reference, a scorecard comparing its performance to ENS can be found in [docs/](https://github.com/google-deepmind/graphcast/blob/main/docs/GenCast_1p0deg_Mini_ENS_scorecard.png). Note that in this scorecard,
 GenCast Mini only uses 8 member ensembles (vs. ENS' 50) so we use the fair (unbiased)
 CRPS to allow for fair comparison.
 

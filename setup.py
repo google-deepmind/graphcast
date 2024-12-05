@@ -33,6 +33,7 @@ setup(
         "cartopy",
         "chex",
         "colabtools",
+        "Cython",
         "dask",
         "dinosaur-dycore",
         "dm-haiku",

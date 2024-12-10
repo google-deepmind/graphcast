@@ -292,7 +292,7 @@ def chunked_prediction_generator(
   if "datetime" in forcings.coords:
     del forcings.coords["datetime"]
 
-  num_target_steps = targets_template.dims["time"]
+  num_target_steps = targets_template.sizes["time"]
   num_chunks, remainder = divmod(num_target_steps, num_steps_per_chunk)
   if remainder != 0:
     raise ValueError(
@@ -394,7 +394,7 @@ def _get_next_inputs(
   next_inputs = next_frame[next_inputs_keys]
 
   # Apply concatenate next frame with inputs, crop what we don't need.
-  num_inputs = prev_inputs.dims["time"]
+  num_inputs = prev_inputs.sizes["time"]
   return (
       xarray.concat(
           [prev_inputs, next_inputs], dim="time", data_vars="different")

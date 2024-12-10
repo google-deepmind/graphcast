@@ -121,7 +121,7 @@ class NoiseEncoderConfig:
   output_sizes: tuple[int, int] = (32, 16)
 
 
-@chex.dataclass(frozen=True, eq=True)
+@chex.dataclass(eq=True)
 class SparseTransformerConfig:
   """Sparse Transformer config."""
   # Neighbours to attend to.

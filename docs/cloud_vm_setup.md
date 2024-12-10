@@ -58,11 +58,22 @@ This document describes how to run `gencast_demo_cloud_vm.ipynb` through [Colabo
 
 - Inference can also be run on GPU, however, splash attention is currently not
   supported for GPU in JAX
-- Instead, in the `SparseTransformerConfig`, set
+- Instead, inference must be run with a model whose `SparseTransformerConfig` has
   ```
   attention_type = "triblockdiag_mha"
   mask_type = "full"
   ```
+  set.
+   - To do this with one of the pre-trained checkpoints provided, load the model
+     and override the config
+     ```
+     with ... as f:
+        ckpt = checkpoint.load(f, gencast.CheckPoint)
+        ...
+        denoiser_architecture_config = ckpt.denoiser_architecture_config
+        denoiser_architecture_config.sparse_transformer_config.attention_type = "triblockdiag_mha"
+        denoiser_architecture_config.sparse_transformer_config.mask_type = "full
+     ```
 - We tried running the model on a H100 with this attention mechanism and found that
   while the performance is comparable, there is a small degradation (on average ~0.3% on unbiased Ensemble Mean RMSE and ~0.4% on unbiased CRPS). We suspect that
   this originates from the attention mechanisms being algebraically equivalent, but

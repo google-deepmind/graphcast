@@ -91,6 +91,8 @@ subdir of the Google Cloud Bucket.
 contains detailed instructions on launching a Google Cloud TPU VM. This provides
 a means of running models (1-3) in the separate `gencast_demo_cloud_vm.ipynb` through [Colaboratory](https://colab.research.google.com/github/deepmind/graphcast/blob/master/gencast_demo_cloud_vm.ipynb).
 
+The document also provides [instructions](https://github.com/google-deepmind/graphcast/blob/main/docs/cloud_vm_setup.md#running-inference-on-gpu) for running GenCast on a GPU. This requires using a different attention implementation.
+
 ### Brief description of relevant library files
 
 *   `denoiser.py`: The GenCast denoiser for one step predictions.
@@ -163,7 +165,7 @@ WARNING: For backwards compatibility, we have also left GraphCast data in the to
 [Python](https://www.python.org/),
 [SciPy](https://scipy.org/),
 [Tree](https://github.com/deepmind/tree),
-[Trimesh](https://github.com/mikedh/trimesh)
+[Trimesh](https://github.com/mikedh/trimesh),
 [XArray](https://github.com/pydata/xarray) and
 [XArray-TensorStore](https://github.com/google/xarray-tensorstore).
 

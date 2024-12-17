@@ -56,7 +56,7 @@ and later years. This model was described in the paper
 `GenCast: Diffusion-based ensemble forecasting for medium-range weather`
 (https://arxiv.org/abs/2312.15796)
 
-2.  `GenCast 0p25deg Operational <2019`, GenCast model at 0.25deg resolution, with 13 pressure levels and a 6
+2.  `GenCast 0p25deg Operational <2022`, GenCast model at 0.25deg resolution, with 13 pressure levels and a 6
 times refined icosahedral mesh. This model is trained on ERA5 data from
 1979 to 2018, and fine-tuned on HRES-fc0 data from
 2016 to 2021 and can be causally evaluated on 2022 and later years.

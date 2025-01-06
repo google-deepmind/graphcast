@@ -1,1 +1,3 @@
 graphcast.egg-info/
+models/
+graphcast/__pycache__/

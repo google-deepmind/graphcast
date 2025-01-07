@@ -1,3 +1,4 @@
 graphcast.egg-info/
 models/
 graphcast/__pycache__/
+.ipynb_checkpoints

@@ -108,8 +108,8 @@ def chunked_prediction_generator_multiple_runs(
   """
   if pmap_devices is not None:
     assert (
-        num_samples % jax.device_count() == 0
-    ), "num_samples must be a multiple of jax.device_count()"
+        num_samples % len(pmap_devices) == 0
+    ), "num_samples must be a multiple of len(pmap_devices)"
 
     def predictor_fn_pmap_named_args(rng, inputs, targets_template, forcings):
       targets_template = _replicate_dataset(
@@ -120,8 +120,8 @@ def chunked_prediction_generator_multiple_runs(
       )
       return predictor_fn(rng, inputs, targets_template, forcings)
 
-    for i in range(0, num_samples, jax.device_count()):
-      sample_idx = slice(i, i + jax.device_count())
+    for i in range(0, num_samples, len(pmap_devices)):
+      sample_idx = slice(i, i + len(pmap_devices))
       logging.info("Samples %s out of %s", sample_idx, num_samples)
       logging.flush()
       sample_group_rngs = rngs[sample_idx]

@@ -24,10 +24,9 @@ import xarray as xr
 import numpy as np
 from botocore.config import Config
 from botocore import UNSIGNED
-import pygrib
+#import pygrib
+import grib2io
 import requests
-from bs4 import BeautifulSoup
-
 
 class GFSDataProcessor:
     def __init__(self, start_datetime, end_datetime, num_pressure_levels=13, download_source='nomads', output_directory=None, download_directory=None, keep_downloaded_data=True, aws=None):
@@ -38,6 +37,7 @@ class GFSDataProcessor:
         self.output_directory = output_directory
         self.download_directory = download_directory
         self.keep_downloaded_data = keep_downloaded_data
+        self.cycle = self.end_datetime.hour
 
         if self.download_source == 's3':
             self.s3 = boto3.client('s3', config=Config(signature_version=UNSIGNED))
@@ -47,11 +47,17 @@ class GFSDataProcessor:
         
         self.root_directory = 'gdas'
 
-        # Specify the local directory where you want to save the files
+        # Specify the local directory where you want to save the downloaded files
         if self.download_directory is None:
             self.local_base_directory = os.path.join(os.getcwd(), self.bucket_name+'_'+str(self.num_levels))  # Use current directory if not specified
         else:
             self.local_base_directory = os.path.join(self.download_directory, self.bucket_name+'_'+str(self.num_levels))
+
+        # Specify the output directory where you want to save the processed files
+        if self.output_directory is None:
+            self.output_directory = os.getcwd()  # Use current directory if not specified
+        os.makedirs(self.output_directory, exist_ok=True)
+        self.output_netcdf = os.path.join(self.output_directory, f"aigfs.t{self.cycle:02d}z.ic.nc")
 
         # List of file formats to download
         if self.num_levels == 13:     
@@ -347,13 +353,8 @@ class GFSDataProcessor:
         date = (self.start_datetime + timedelta(hours=6)).strftime('%Y%m%d%H')
         steps = str(len(ds['time']))
 
-        if self.output_directory is None:
-            self.output_directory = os.getcwd()  # Use current directory if not specified
-        output_netcdf = os.path.join(self.output_directory, f"source-gdas_date-{date}_res-0.25_levels-{self.num_levels}_steps-{steps}.nc")
-
         # Save the merged dataset as a NetCDF file
-        ds.to_netcdf(output_netcdf)
-        print(f"Saved output to {output_netcdf}")
+        ds.to_netcdf(self.output_netcdf)
         for file in files:
             os.remove(file)
             
@@ -361,36 +362,35 @@ class GFSDataProcessor:
         if not self.keep_downloaded_data:
             self.remove_downloaded_data()
 
-        print(f"Process completed successfully, your inputs for GraphCast model generated at:\n {output_netcdf}")
+        print(f"Process completed successfully, your inputs for GraphCast model generated at:\n {self.output_netcdf}")
 
-    def process_data_with_pygrib(self):
+    def process_data_with_grib2io(self):
         # Define the directory where your GRIB2 files are located
         data_directory = self.local_base_directory
 
         #Get time-varying variables
         variables_to_extract = {
             '.pgrb2.0p25.f000': {
-                '2t': {
-                    'typeOfLevel': 'heightAboveGround',
-                    'level': 2,
+                'TMP': {
+                    'level': ['2 m above ground'],
                 },
-                'prmsl': {
-                    'typeOfLevel': 'meanSea',
-                    'level': 0,
+                'PRMSL': {
+                    'level': ['mean sea level'],
                 },
-                '10u, 10v': {
-                    'typeOfLevel': 'heightAboveGround',
-                    'level': 10,
+                'UGRD, VGRD': {
+                    'level': ['10 m above ground'],
                 },
-                'w, u, v, q, t, gh': {
-                    'typeOfLevel': 'isobaricInhPa',
-                    'level': [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000],
+                'SPFH, VVEL, VGRD, UGRD, HGT, TMP': {
+                    'level': [
+                        '50 mb', '100 mb', '150 mb', '200 mb', '250 mb', 
+                        '300 mb', '400 mb', '500 mb', '600 mb', '700 mb', 
+                        '850 mb', '925 mb', '1000 mb'
+                    ],
                 },
             },
             '.pgrb2.0p25.f006': {
-                'tp': {  # total precipitation 
-                    'typeOfLevel': 'surface',
-                    'level': 0,
+                'APCP': {  # total precipitation 
+                    'level': ['surface'],
                 },
             }
         }
@@ -435,28 +435,32 @@ class GFSDataProcessor:
                             print("Error: Found multiple or no matching files.")
 
                         #open grib file
-                        grbs = pygrib.open(fname)
+                        grbs = grib2io.open(fname)
 
                         for key, value in variables.items():
 
                             variable_names = key.split(', ')
-                            levelType = value['typeOfLevel']
+                            #levelType = value['typeOfLevel']
                             desired_level = value['level']
                     
                             for var_name in variable_names:
 
                                 print(f'Get variable {var_name} from file {fname}:')
-                                da = self.get_dataarray(grbs, var_name, levelType, desired_level)
-
-                                #extract variables from pgrb2b
-                                if (levelType == 'isobaricInhPa') & (self.num_levels == 37):
-                                    fname2b = os.path.join(subfolder_path, f'gdas.t{hour}z{file_extension_2b}')
-                                    grbs2b = pygrib.open(fname2b)
-                                    da_extra = self.get_dataarray(grbs2b, var_name, levelType, extra_levels)
-                                    da_combined = da.combine_first(da_extra) 
-                                    mergeDAs.append(da_combined)
+                                if len(desired_level) > 1:
+                                    da = self.get_dataarray_3d(grbs, var_name, desired_level)
                                 else:
-                                    mergeDAs.append(da)
+                                    da = self.get_dataarray(grbs, var_name, desired_level[0])
+                                mergeDAs.append(da)
+
+                                ##extract variables from pgrb2b
+                                #if (levelType == 'isobaricInhPa') & (self.num_levels == 37):
+                                #    fname2b = os.path.join(subfolder_path, f'gdas.t{hour}z{file_extension_2b}')
+                                #    grbs2b = pygrib.open(fname2b)
+                                #    da_extra = self.get_dataarray(grbs2b, var_name, levelType, extra_levels)
+                                #    da_combined = da.combine_first(da_extra) 
+                                #    mergeDAs.append(da_combined)
+                                #else:
+                                #    mergeDAs.append(da)
 
                     ds = xr.merge(mergeDAs)
 
@@ -470,27 +474,26 @@ class GFSDataProcessor:
         grbfiles = glob.glob(f'{data_directory}/*/*/*.f000')
         grbfiles.sort()
         #Get lsm/orog from the first file
-        grbs = pygrib.open(grbfiles[0])
-        levelType = 'surface'
-        desired_level = 0
-        for var_name in ['lsm', 'orog']:
-            da = self.get_dataarray(grbs, var_name, levelType, desired_level)
+        grbs = grib2io.open(grbfiles[0])
+        desired_level = 'surface'
+        for var_name in ['LAND', 'HGT']:
+            da = self.get_dataarray(grbs, var_name, desired_level)
             ds = xr.merge([ds, da])
 
         ds = ds.rename({
-            'lsm': 'land_sea_mask',
-            'orog': 'geopotential_at_surface',
-            'prmsl': 'mean_sea_level_pressure',
-            '2t': '2m_temperature',
-            '10u': '10m_u_component_of_wind',
-            '10v': '10m_v_component_of_wind',
-            'tp': 'total_precipitation_6hr',
-            'gh': 'geopotential',
-            't': 'temperature',
-            'q': 'specific_humidity',
-            'w': 'vertical_velocity',
-            'u': 'u_component_of_wind',
-            'v': 'v_component_of_wind'
+            'LAND_surface': 'land_sea_mask',
+            'HGT_surface': 'geopotential_at_surface',
+            'PRMSL_meansealevel': 'mean_sea_level_pressure',
+            'TMP_2maboveground': '2m_temperature',
+            'UGRD_10maboveground': '10m_u_component_of_wind',
+            'VGRD_10maboveground': '10m_v_component_of_wind',
+            'APCP_surface': 'total_precipitation_6hr',
+            'HGT': 'geopotential',
+            'TMP': 'temperature',
+            'SPFH': 'specific_humidity',
+            'VVEL': 'vertical_velocity',
+            'UGRD': 'u_component_of_wind',
+            'VGRD': 'v_component_of_wind',
         })
 
         ds = ds.assign_coords(datetime=ds.time)
@@ -517,19 +520,16 @@ class GFSDataProcessor:
         date = (self.start_datetime + timedelta(hours=6)).strftime('%Y%m%d%H')
         steps = str(len(ds['time']))
 
-        if self.output_directory is None:
-            self.output_directory = os.getcwd()  # Use current directory if not specified
-        output_netcdf = os.path.join(self.output_directory, f"source-gdas_date-{date}_res-0.25_levels-{self.num_levels}_steps-{steps}.nc")
 
         #final_dataset = ds.assign_coords(datetime=ds.time)
-        ds.to_netcdf(output_netcdf)
+        ds.to_netcdf(self.output_netcdf)
         ds.close()
         
         # Optionally, remove downloaded data
         if not self.keep_downloaded_data:
             self.remove_downloaded_data()
 
-        print(f"Process completed successfully, your inputs for GraphCast model generated at:\n {output_netcdf}")
+        print(f"Process completed successfully, your inputs for GraphCast model generated at:\n {self.output_netcdf}")
             
     def remove_downloaded_data(self):
         # Remove downloaded data from the specified directory
@@ -540,13 +540,13 @@ class GFSDataProcessor:
         except Exception as e:
             print(f"Error removing downloaded data: {str(e)}")
 
-    def get_dataarray(self, grbfile, var_name, level_type, desired_level):
+    def get_dataarray(self, grbfile, var_name, desired_level):
 
-        # Find the matching grib message
-        variable_message = grbfile.select(shortName=var_name, typeOfLevel=level_type, level=desired_level)
+        # Find the matching grib message, return a list
+        msg = grbfile.select(shortName=var_name, level=desired_level)
     
         # create a netcdf dataset using the matching grib message
-        lats, lons = variable_message[0].latlons()
+        lats, lons = msg[0].latlons()
         lats = lats[:,0]
         lons = lons[0,:]
     
@@ -556,26 +556,19 @@ class GFSDataProcessor:
             reverse_lat = True
             lats = lats[::-1]
     
-        steps = variable_message[0].validDate
-        if var_name=='tp':
-            steps = steps + timedelta(hours=6)
+        steps = msg[0].validDate
+        #if var_name=='APCP':
+        #    steps = steps + timedelta(hours=6)
         #precipitation rate has two stepType ('instant', 'avg'), use 'instant')
-        if len(variable_message) > 2:
-            data = []
-            for message in variable_message:
-                data.append(message.values)
-            data = np.array(data)
-            if reverse_lat:
-                data = data[:, ::-1, :]
-        else:
-            data = variable_message[0].values
-            if reverse_lat:
-                data = data[::-1, :]
+        data = msg[0].data
+        if reverse_lat:
+            data = data[::-1, :]
     
+        var_name2 = f'{var_name}_{"".join(desired_level.split())}'
         if len(data.shape) == 2:
             da = xr.Dataset(
                 data_vars={
-                    var_name: (['lat', 'lon'], data.astype('float32'))
+                    var_name2: (['lat', 'lon'], data.astype('float32'))
                 },
                 coords={
                     'lon': lons.astype('float32'),
@@ -598,14 +591,52 @@ class GFSDataProcessor:
     
         return da
 
+    def get_dataarray_3d(self, grbfile, var_name, desired_level):
 
+        data, levels = [], []
+        for i, level in enumerate(desired_level):
+            msg = grbfile.select(shortName=var_name, level=level)
+    
+            if i == 0:
+                lats, lons = msg[0].latlons()
+                lats = lats[:,0]
+                lons = lons[0,:]
+    
+                #check latitude range, graphcast needs [-90, 90]
+                reverse_lat = False
+                if lats[0] > 0:
+                    reverse_lat = True
+                    lats = lats[::-1]
+    
+                steps = msg[0].validDate
+
+            data.append(msg[0].data)
+            levels.append(int(level.split(' ')[0]))
+
+        data = np.array(data)
+        if reverse_lat:
+            data = data[:, ::-1, :]
+    
+        da = xr.Dataset(
+            data_vars={
+                var_name: (['level', 'lat', 'lon'], data.astype('float32'))
+            },
+            coords={
+                'lon': lons.astype('float32'),
+                'lat': lats.astype('float32'),
+                'level': np.array(levels).astype('int32'),
+                'time': steps,  
+            }
+        )
+    
+        return da
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download and process GDAS data")
     parser.add_argument("start_datetime", help="Start datetime in the format 'YYYYMMDDHH'")
     parser.add_argument("end_datetime", help="End datetime in the format 'YYYYMMDDHH'")
     parser.add_argument("-l", "--levels", help="number of pressure levels, options: 13, 37", default="13")
-    parser.add_argument("-m", "--method", help="method to extact variables from grib2, options: wgrib2, pygrib", default="wgrib2")
+    parser.add_argument("-m", "--method", help="method to extact variables from grib2, options: wgrib2, grib2io", default="wgrib2")
     parser.add_argument("-s", "--source", help="the source repository to download gdas grib2 data, options: nomads (up-to-date), s3", default="s3")
     parser.add_argument("-o", "--output", help="Output directory for processed data")
     parser.add_argument("-d", "--download", help="Download directory for raw data")
@@ -627,8 +658,8 @@ if __name__ == "__main__":
     
     if method == "wgrib2":
       data_processor.process_data_with_wgrib2()
-    elif method == "pygrib":
-      data_processor.process_data_with_pygrib()
+    elif method == "grib2io":
+      data_processor.process_data_with_grib2io()
     else:
       raise NotImplementedError(f"Method {method} is not supported!")
 

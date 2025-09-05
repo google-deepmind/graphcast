@@ -1,151 +1,142 @@
-""" Utility for converting netcdf data to grib2.
-
-    History:
-        01/26/2024: Linlin Cui (linlin.cui@noaa.gov), added function save_grib2 
-        02/05/2024: Sadegh Tabas update the utility to a object-oriented format
-        04/25/2024: Sadegh Tabas, generate grib2 index files
-        07/03/2024: Sadegh Tabas, sorted grib2 variables
-"""
+#!/usr/bin/env python
 
 import os
-from datetime import datetime, timedelta
-import glob
 import subprocess
-import cf_units
-import iris
-import iris_grib
-import eccodes
+from time import time
+import json
+import multiprocessing as mp
+
+import xarray as xr
+import datetime
+import grib2io
+import numpy as np
+import pandas as pd
+
+
+SECTION3 = np.array([0, 1038240, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1440, 721, 0, -1, 90000000, 0, 48, -90000000, 359750000,250000, 250000, 0])
+
 
 class Netcdf2Grib:
-    def __init__(self):
-        self.ATTR_MAPS = {
-            '10m_u_component_of_wind': [10, 'x_wind', 'm s**-1'],
-            '10m_v_component_of_wind': [10, 'y_wind', 'm s**-1'],
-            'mean_sea_level_pressure': [0, 'air_pressure_at_sea_level', 'Pa'],
-            '2m_temperature': [2, 'air_temperature', 'K'],
-            'total_precipitation_6hr': [0, 'precipitation_amount', 'kg m**-2'],
-            'total_precipitation_cumsum': [0, 'precipitation_amount', 'kg m**-2'],
-            'vertical_velocity': [None, 'lagrangian_tendency_of_air_pressure', 'Pa s**-1'],
-            'specific_humidity': [None, 'specific_humidity', 'kg kg**-1'],
-            'temperature': [None, 'air_temperature', 'K'],
-            'geopotential': [None, 'geopotential_height', 'm'],
-            'u_component_of_wind': [None, 'x_wind', 'm s**-1'],
-            'v_component_of_wind': [None, 'y_wind', 'm s**-1'],
-        }
+    def __init__(self, start_date, case_name="mlgfs"):
+        self.case_name = case_name
 
-    def tweaked_messages(self, cube, time_range=None):
-        """
-        Adjust GRIB messages based on cube properties.
-        """
-        for cube, grib_message in iris_grib.save_pairs_from_cube(cube):
+        if self.case_name == "mlgfs":
+            table_file = "utils/tables_mlgfs.json"
+        elif self.case_name.startswith("mlge"):
+            table_file = "utils/tables_mlgefs.json"
+        else:
+            raise ValueError(f"name {self.case_name} is not supported!")
 
-            eccodes.codes_set(grib_message, 'centre', 'kwbc')
-            eccodes.codes_set(grib_message, 'typeOfGeneratingProcess', 2)
+        with open(table_file, "r") as f:
+            self.attrs = json.load(f)
+        self.start_date = start_date
 
-            if cube.standard_name == 'precipitation_amount':
-                eccodes.codes_set(grib_message, 'stepType', 'accum')
-                eccodes.codes_set(grib_message, 'stepRange', time_range)
-                eccodes.codes_set(grib_message, 'discipline', 0)
-                eccodes.codes_set(grib_message, 'parameterCategory', 1)
-                eccodes.codes_set(grib_message, 'parameterNumber', 8)
-                eccodes.codes_set(grib_message, 'typeOfFirstFixedSurface', 1)
-                eccodes.codes_set(grib_message, 'typeOfStatisticalProcessing', 1)
-            elif cube.standard_name == 'air_pressure_at_sea_level':
-                eccodes.codes_set(grib_message, 'discipline', 0)
-                eccodes.codes_set(grib_message, 'parameterCategory', 3)
-                eccodes.codes_set(grib_message, 'parameterNumber', 1)
-                eccodes.codes_set(grib_message, 'typeOfFirstFixedSurface', 101)
-        yield grib_message
+    def create_grib2_message(self, var, da, lead, level=None):
 
-    def save_grib2(self, dates, forecasts, outdir):
-        """
-        Convert netCDF file to GRIB2 format file.
-            Args:
-              dates: array of datetime object, from the source file
-              forecasts: xarray forecasts dataset
-              outdir: output directory
-        
-            Returns:
-              No return values, will save to grib2 file
-        """
-        forecasts = forecasts.reindex(lat=list(reversed(forecasts.lat)))
+        # Set duration. NOTE: the duration attr exists for all Grib2Message objects.
+        # For Grib2Messages that are instantaneous, the duration is just 0.
+        duration = datetime.timedelta(hours=0)
+        if var == "total_precipitation_6hr":
+            duration = datetime.timedelta(hours=6)
+        elif var == "total_precipitation_cumsum":
+            duration = datetime.timedelta(hours=lead)
 
-        for var in forecasts.variables:
-            if 'batch' in forecasts[var].dims:
-                forecasts[var] = forecasts[var].squeeze(dim='batch')
+        # Create GRIB2 message.
+        msg = grib2io.Grib2Message(
+            section3=SECTION3,
+            pdtn=self.attrs[var]["templates"]["pdtn"],
+            drtn=self.attrs[var]["templates"]["drtn"],
+        )
 
-        # Update units
-        forecasts['level'] = forecasts['level'] * 100
-        forecasts['level'].attrs['long_name'] = 'pressure'
-        forecasts['level'].attrs['units'] = 'Pa'
-        forecasts['geopotential'] = forecasts['geopotential'] / 9.80665
-        if 'total_precipitation_6hr' in forecasts:
-            forecasts['total_precipitation_6hr'] = (forecasts['total_precipitation_6hr'].clip(min=0)) * 1000
-            forecasts['total_precipitation_cumsum'] = forecasts['total_precipitation_6hr'].cumsum(axis=0)
+        # Set GRIB2 attributes from json table.
+        for k,v in self.attrs[var]["attrs"].items():
+            setattr(msg, k, v)
 
-        filename = os.path.join(outdir, "forecast_to_grib2.nc")
-        forecasts.to_netcdf(filename)
+        # Set GRIB2 attributes for ensemble members
+        if self.case_name.startswith("mlge"):
+            number = int(self.case_name[-2:])
+            msg.perturbationNumber = number
+            if "c00" in self.case_name:
+                msg.typeOfEnsembleForecast = 1
+                msg.typeOfData = 3
+            else:
+                msg.typeOfEnsembleForecast = 3
+                msg.typeOfData = 4
 
-        # Load cubes from netCDF file
-        cubes = iris.load(filename)
-        times = cubes[0].coord('time').points
-        forecast_starttime = dates[0][1]
-        cycle = forecast_starttime.hour
-        print(f'Forecast start time is {forecast_starttime}')
+        # Set GRIB2 attributes unique to each iteration.
+        msg.refDate = self.start_date
+        msg.duration = duration
+        msg.unitOfForecastTime = 1 # Hour
+        msg.leadTime = datetime.timedelta(hours=lead)
+        if level is not None:
+            msg.scaledValueOfFirstFixedSurface = level
 
-        datevectors = [forecast_starttime + timedelta(hours=int(t)) for t in times]
+        return msg
 
-        time_fmt_str = '00:00:00'
-        time_unit_str = f"Hours since {forecast_starttime.strftime('%Y-%m-%d %H:00:00')}"
-        time_coord = cubes[0].coord('time')
-        new_time_unit = cf_units.Unit(time_unit_str, calendar=cf_units.CALENDAR_STANDARD)
-        new_time_points = [new_time_unit.date2num(dt) for dt in datevectors]
-        new_time_coord = iris.coords.DimCoord(new_time_points, standard_name='time', units=new_time_unit)
+    def save_grib2(self, xarray_ds, outdir):
 
-        for date in datevectors:
-            print(f"Processing for time {date.strftime('%Y-%m-%d %H:00:00')}")
-            hrs = int((date - forecast_starttime).total_seconds() // 3600)
-            outfile = os.path.join(outdir, f'graphcastgfs.t{cycle:02d}z.pgrb2.0p25.f{hrs:03d}')
-            print(outfile)
+        prefix = "aigefs" if self.case_name.startswith("mlge") else "aigfs"
 
-            for cube in sorted(cubes, key=lambda cube: cube.name()):
-                var_name = cube.name()
+        # Convert geopotential to geopotential height.
+        xarray_ds["geopotential"] = xarray_ds["geopotential"] / 9.80665
 
-                # Adjust cube for different variables
-                time_coord_dim = cube.coord_dims('time')
-                cube.remove_coord('time')
-                cube.add_dim_coord(new_time_coord, time_coord_dim)
+        # Successively accumulate 6-hr precip.
+        if "total_precipitation_6hr" in xarray_ds:
+            xarray_ds["total_precipitation_6hr"] = xarray_ds["total_precipitation_6hr"].clip(min=0) * 1000
+            xarray_ds["total_precipitation_cumsum"] = xarray_ds["total_precipitation_6hr"].cumsum(axis=0)
 
-                hour_6 = iris.Constraint(time=iris.time.PartialDateTime(month=date.month, day=date.day, hour=date.hour))
-                cube_slice = cube.extract(hour_6)
-                cube_slice.coord('latitude').coord_system = iris.coord_systems.GeogCS(4326)
-                cube_slice.coord('longitude').coord_system = iris.coord_systems.GeogCS(4326)
+        # Convert levels values from mb to Pa.
+        xarray_ds["level"] = xarray_ds["level"] * 100 # Convert mb to Pa
+        xarray_ds = xarray_ds.squeeze(dim="batch")
 
-                if len(cube_slice.data.shape) == 3:
-                    levels = cube_slice.coord('pressure').points
-                    for level in levels:
-                        cube_slice_level = cube_slice.extract(iris.Constraint(pressure=level))
-                        cube_slice_level.add_aux_coord(iris.coords.DimCoord(hrs, standard_name='forecast_period', units='hours'))
-                        cube_slice_level.standard_name = self.ATTR_MAPS[var_name][1]
-                        cube_slice_level.units = self.ATTR_MAPS[var_name][2]
-                        iris_grib.save_messages(self.tweaked_messages(cube_slice_level), outfile, append=True)
-                else:
-                    cube_slice.add_aux_coord(iris.coords.DimCoord(hrs, standard_name='forecast_period', units='hours'))
-                    cube_slice.standard_name = self.ATTR_MAPS[var_name][1]
-                    cube_slice.units = self.ATTR_MAPS[var_name][2]
+        # Reverse lat
+        xarray_ds = xarray_ds.reindex(lat = xarray_ds.lat[::-1])
 
-                    if var_name not in ['mean_sea_level_pressure', 'total_precipitation_6hr', 'total_precipitation_cumsum']:
-                        cube_slice.add_aux_coord(iris.coords.DimCoord(self.ATTR_MAPS[var_name][0], standard_name='height', units='m'))
-                        iris_grib.save_messages(self.tweaked_messages(cube_slice), outfile, append=True)
-                    elif var_name == 'total_precipitation_6hr':
-                        iris_grib.save_messages(self.tweaked_messages(cube_slice, f'{hrs-6}-{hrs}'), outfile, append=True)
-                    elif var_name == 'total_precipitation_cumsum':
-                        iris_grib.save_messages(self.tweaked_messages(cube_slice, f'0-{hrs}'), outfile, append=True)
-                    elif var_name == 'mean_sea_level_pressure':
-                        cube_slice.add_aux_coord(iris.coords.DimCoord(self.ATTR_MAPS[var_name][0], standard_name='altitude', units='m'))
-                        iris_grib.save_messages(self.tweaked_messages(cube_slice), outfile, append=True)
+        # Set output GRIB2 file.
+        cycle = self.start_date.hour
+        lead = int(xarray_ds.time.dt.total_seconds()//3600)
+        outfile_sfc = os.path.join(outdir, f"{prefix}.t{cycle:02d}z.sfc.f{lead:03d}.grib2")
+        outfile_pres = os.path.join(outdir, f"{prefix}.t{cycle:02d}z.pres.f{lead:03d}.grib2")
 
-            # Use wgrib2 to generate index files
+        # Delete the old file.
+        for outfile in [outfile_sfc, outfile_pres]:
+            if os.path.isfile(outfile):
+                os.remove(outfile)
+
+        # Open GRIB2 file.
+        grib2_out_sfc = grib2io.open(outfile_sfc, mode="w")
+        print(f" Opening GRIB2 File for surface variables: {outfile_sfc}")
+
+        grib2_out_pres = grib2io.open(outfile_pres, mode="w")
+        print(f" Opening GRIB2 File for pressure level variables: {outfile_pres}")
+
+        # Iterate over the variable name keys in JSON file.
+        for var in sorted(xarray_ds.data_vars):
+
+            # Get variable as DataArray.
+            da = xarray_ds[var]
+
+            # Iterate over level...
+            if "level" in da.coords.keys():
+                for level in da.coords["level"]:
+                    msg = self.create_grib2_message(var, da, lead, level=level)
+                    msg.data = da.sel(level=level).values
+                    msg.pack()
+                    print(f"\t{msg}")
+                    grib2_out_pres.write(msg)
+            else:
+                msg = self.create_grib2_message(var, da, lead)
+                msg.data = da.values
+                msg.pack()
+                print(f"\t{msg}")
+                grib2_out_sfc.write(msg)
+
+        # Close GRIB2 file
+        grib2_out_sfc.close()
+        grib2_out_pres.close()
+
+        # Use wgrib2 to generate index files
+        for outfile in [outfile_sfc, outfile_pres]:
             output_idx_file = f"{outfile}.idx"
             
             # Construct the wgrib2 command
@@ -161,27 +152,19 @@ class Netcdf2Grib:
             
             except subprocess.CalledProcessError as e:
                 print(f"Error running wgrib2 command: {e}")
+
+if __name__ == "__main__":
     
+    table_file = "tables.json"
+    
+    start_date = pd.to_datetime("2025-07-30 06:00:00")
+    ds = xr.open_dataset("forecasts_levels-13_steps-64.nc")
+    g2prefix = "mlgec00"
 
-        # Remove intermediate netCDF file
-        if os.path.isfile(filename):
-            print(f'Deleting intermediate nc file {filename}: ')
-            os.remove(filename)
+    t0 = time()
+    outdir = "./"
+    os.makedirs(outdir, exist_ok=True)
+    converter = Netcdf2Grib(start_date)
+    converter.save_grib2(ds, g2prefix, outdir)
 
-        # subset grib2 files
-        def subset_grib2(indir=None):
-            files = glob.glob(f'{indir}/graphcastgfs.*')
-            files.sort()
-        
-            outdir = os.path.join(indir, 'north_america')
-            os.makedirs(outdir, exist_ok=True)
-            
-            lonMin, lonMax, latMin, latMax = 61.0, 299.0, -37.0, 37.0 
-            for grbfile in files:
-                outfile = f"{outdir}/{grbfile.split('/')[-1]}"
-                command = ['wgrib2', grbfile, '-small_grib', f'{lonMin}:{lonMax}', f'{latMin}:{latMax}', outfile]
-                subprocess.run(command, check=True)
-                
-        
-        # subset_grib2(outdir)
-
+    print(f"It took {(time()-t0)/60} mins")

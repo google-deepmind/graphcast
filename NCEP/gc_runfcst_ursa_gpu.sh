@@ -18,13 +18,11 @@ module load stack-oneapi
 module load wgrib2
 
 source /scratch3/NCEPDEV/nems/Linlin.Cui/miniforge3/etc/profile.d/conda.sh
-conda activate graphcast
+conda activate mlglobal
 
-curr_datetime=$1
-echo "Current state: $curr_datetime"
-#echo "6 hours earlier state: $prev_datetime"
+PDY=${1:-20250905}
+cyc=${2:-06}
 
-echo "Current state: $curr_datetime"
 forecast_length=64
 echo "forecast length: $forecast_length"
 
@@ -37,7 +35,7 @@ echo "Model weights and stats are at: $model_weights"
 start_time=$(date +%s)
 echo "start runing graphcast to get real time 10-days forecasts for: $curr_datetime"
 
-numactl --interleave=all python run_graphcast.py -i source-gdas_date-"$curr_datetime"_res-0.25_levels-"$num_pressure_levels"_steps-2.nc -w $model_weight -l "$forecast_length" -p "$num_pressure_levels" -m grib2io -u no -k yes
+numactl --interleave=all python run_graphcast.py -i aigfs.$PDY/$cyc/aigfs.t06z.ic.nc -w $model_weights -n mlgfs -l "$forecast_length" -p "$num_pressure_levels" -o aigfs.$PDY/$cyc -u no -k yes
 
 end_time=$(date +%s)  # Record the end time in seconds since the epoch
 

@@ -2,13 +2,8 @@
 Description: Script to call the graphcast model using gdas products
 Author: Sadegh Sadeghi Tabas (sadegh.tabas@noaa.gov)
 Revision history:
-    -20231218: Sadegh Tabas, initial code
-    -20240118: Sadegh Tabas, S3 bucket module to upload data, adding forecast length, Updating batch dataset to account for forecast length
-    -20240125: Linlin Cui, added a capability to save output as grib2 format
-    -20240205: Sadegh Tabas, made the code clearer, added 37 pressure level option, updated upload to s3
-    -20240731: Sadegh Tabas, added grib2 file for F000
-    -20240815: Sadegh Tabas, update the directory of fine tuned model parameters
-    -20240911: Linlin Cui, temporarily disable deleting input file in this script and enable it in run_graphcast_exp.py script
+    -20240307: Sadegh Tabas, initial code
+    -20250506: Linlin Cui, moved hard coded model weights to a json file
 '''
 import os
 import argparse
@@ -22,6 +17,7 @@ import numpy as np
 import xarray
 import boto3
 import pandas as pd
+import pickle
 
 from graphcast import autoregressive
 from graphcast import casting
@@ -31,19 +27,30 @@ from graphcast import graphcast
 from graphcast import normalization
 from graphcast import rollout
 
+from utils.nc2grib import Netcdf2Grib
 
 class GraphCastModel:
-    def __init__(self, pretrained_model_path, gdas_data_path, output_dir=None, num_pressure_levels=13, forecast_length=40, method='iris'):
+    def __init__(
+        self, 
+        pretrained_model_path, 
+        gdas_data_path, 
+        case_name: str, 
+        config_file = None, 
+        output_dir = None, 
+        num_pressure_levels = 13, 
+        forecast_length = 64,
+    ):
         self.pretrained_model_path = pretrained_model_path
         self.gdas_data_path = gdas_data_path
         self.forecast_length = forecast_length
+        self.case_name = case_name
         self.num_pressure_levels = num_pressure_levels
-        self.method = method
+        self.config_file_path = config_file
         
         if output_dir is None:
-            self.output_dir = os.path.join(os.getcwd(), f"forecasts_{str(self.num_pressure_levels)}_levels")  # Use current directory if not specified
+            self.output_dir = os.getcwd()
         else:
-            self.output_dir = os.path.join(output_dir, f"forecasts_{str(self.num_pressure_levels)}_levels")
+            self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
         
         self.params = None
@@ -70,10 +77,17 @@ class GraphCastModel:
 
         with open(model_weights_path, "rb") as f:
             ckpt = checkpoint.load(f, graphcast.CheckPoint)
-            self.params = ckpt.params
+            #self.params = ckpt.params
             self.state = {}
             self.model_config = ckpt.model_config
             self.task_config = ckpt.task_config
+
+            #update params
+            if self.config_file_path is not None:
+                with open(self.config_file_path, 'rb') as f:
+                    self.params = pickle.load(f)
+            else:
+                self.params = ckpt.params
 
     def load_gdas_data(self):
         """Load GDAS data."""
@@ -169,20 +183,6 @@ class GraphCastModel:
         print (f"start running GraphCast for {self.forecast_length} steps --> {self.forecast_length*6} hours.")
         self.load_model()
            
-        # output = self.model(self.model ,rng=jax.random.PRNGKey(0), inputs=self.inputs, targets_template=self.targets * np.nan, forcings=self.forcings,)
-        forecasts = rollout.chunked_prediction(self.model, rng=jax.random.PRNGKey(0), inputs=self.inputs, targets_template=self.targets * np.nan, forcings=self.forcings,)
-        
-        # filename = f"forecasts_levels-{self.num_pressure_levels}_steps-{self.forecast_length}.nc"
-        # output_netcdf = os.path.join(self.output_dir, filename)
-        # 
-        # #save forecasts
-        # forecasts.to_netcdf(output_netcdf)
-        # print (f"GraphCast run completed successfully, you can find the GraphCast forecasts in the following directory:\n {output_netcdf}")
-
-        self.save_grib2(forecasts)
-
-    def save_grib2(self, forecasts):
-
         # Call and save f000 in grib2
         ds = self.current_batch
         ds = ds.drop_vars(['geopotential_at_surface','land_sea_mask', 'total_precipitation_6hr'])
@@ -192,33 +192,19 @@ class GraphCastModel:
         ds = ds.isel(time=slice(1, 2))
         ds['time'] = ds['time'] - pd.Timedelta(hours=6)
 
-        if self.method == 'iris':
+        converter = Netcdf2Grib(self.dates[0][1], case_name=self.case_name)
+        converter.save_grib2(ds, self.output_dir)
 
-            from utils.nc2grib import Netcdf2Grib
+        rollout.chunked_prediction(
+            self.output_dir, 
+            converter, 
+            self.model, 
+            rng=jax.random.PRNGKey(0), 
+            inputs=self.inputs, 
+            targets_template=self.targets * np.nan, 
+            forcings=self.forcings,
+        )
 
-            converter = Netcdf2Grib()
-
-            #save f000
-            converter.save_grib2(self.dates, ds, self.output_dir)
-        
-            # Call and save forecasts in grib2
-            converter.save_grib2(self.dates, forecasts, self.output_dir)
-
-        elif self.method == 'grib2io':
-
-            from utils.grib2io import Netcdf2Grib
-
-            converter = Netcdf2Grib(self.dates[0][1])
-
-            #save f000
-            converter.save_grib2(ds, self.output_dir)
-        
-            # Call and save forecasts in grib2
-            converter.save_grib2(forecasts, self.output_dir)
-
-        else:
-            raise ValueError(f'method {self.method} is not supported!')
-    
     def upload_to_s3(self, keep_data):
         s3 = boto3.client('s3')
         
@@ -264,8 +250,8 @@ class GraphCastModel:
             print("Removing input and forecast data from the specified directory...")
             try:
                 os.system(f"rm -rf {self.output_dir}")
-                #os.remove(self.gdas_data_path)
-                #print("Local input and output files deleted.")
+                os.remove(self.gdas_data_path)
+                print("Local input and output files deleted.")
             except Exception as e:
                 print(f"Error removing input and forecast data: {str(e)}")
 
@@ -276,14 +262,16 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--input", help="input file path (including file name)", required=True)
     parser.add_argument("-w", "--weights", help="parent directory of the graphcast params and stats", required=True)
     parser.add_argument("-l", "--length", help="length of forecast (6-hourly), an integer number in range [1, 40]", required=True)
+    parser.add_argument("-n", "--case_name", help="mlgfs, or gefs member [mlgec00, mlgep01, ..., mlgep30]", required=True)
+    #parser.add_argument("-c", "--config", help="GC weight member file", required=True)
+    parser.add_argument("-c", "--config", help="GC weight member file", default=None)
     parser.add_argument("-o", "--output", help="output directory", default=None)
     parser.add_argument("-p", "--pressure", help="number of pressure levels", default=13)
-    parser.add_argument("-m", "--method", help="using either grib2io or iris to convert nc to grib2", default="iris")
     parser.add_argument("-u", "--upload", help="upload input data as well as forecasts to noaa s3 bucket (yes or no)", default = "no")
     parser.add_argument("-k", "--keep", help="keep input and output after uploading to noaa s3 bucket (yes or no)", default = "no")
     
     args = parser.parse_args()
-    runner = GraphCastModel(args.weights, args.input, args.output, int(args.pressure), int(args.length), args.method)
+    runner = GraphCastModel(args.weights, args.input, args.case_name, args.config, args.output, int(args.pressure), int(args.length))
     
     runner.load_pretrained_model()
     runner.load_gdas_data()

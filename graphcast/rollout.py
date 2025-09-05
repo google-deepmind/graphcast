@@ -15,7 +15,6 @@
 
 from typing import Iterator, Optional, Sequence
 import time
-from datetime import datetime
 
 from absl import logging
 import chex

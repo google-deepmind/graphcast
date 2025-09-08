@@ -132,6 +132,13 @@ def featurize_progress(
   }
 
 
+def get_seconds_since_epoch(datetime_sequence: xarray.DataArray) -> np.ndarray:
+  """Computes seconds since epoch from `data` in place if missing."""
+  # Note `datetime_sequence.astype("datetime64[s]").astype(np.int64)`
+  # does not work as xarrays always cast dates into nanoseconds!
+  return datetime_sequence.data.astype("datetime64[s]").astype(np.int64)
+
+
 def add_derived_vars(data: xarray.Dataset) -> None:
   """Adds year and day progress features to `data` in place if missing.
 
@@ -147,11 +154,7 @@ def add_derived_vars(data: xarray.Dataset) -> None:
       raise ValueError(f"'{coord}' must be in `data` coordinates.")
 
   # Compute seconds since epoch.
-  # Note `data.coords["datetime"].astype("datetime64[s]").astype(np.int64)`
-  # does not work as xarrays always cast dates into nanoseconds!
-  seconds_since_epoch = (
-      data.coords["datetime"].data.astype("datetime64[s]").astype(np.int64)
-  )
+  seconds_since_epoch = get_seconds_since_epoch(data.coords["datetime"])
   batch_dim = ("batch",) if "batch" in data.dims else ()
 
   # Add year progress features if missing.

@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for xarray_jax."""
 
 from absl.testing import absltest
 import chex
@@ -142,6 +141,16 @@ class XarrayJaxTest(absltest.TestCase):
       outputs = function(inputs)
       self.assertEqual(outputs.dims, inputs.dims)
 
+  def test_jit_ahead_of_time_compile_with_xarray(self):
+    # This needs jax.stages.ArgInfo to be wrapped, since .lower maps the xarray
+    # to a pytree of ArgInfo under the hood.
+    function = jax.jit(lambda v: v + 1)
+    inputs = xarray_jax.Variable(
+        ('lat', 'lon'), jnp.ones((3, 4), dtype=np.float32))
+    compiled_function = function.lower(inputs).compile()
+    outputs = compiled_function(inputs)
+    self.assertEqual(outputs.dims, inputs.dims)
+
   def test_jit_problem_if_convert_to_plain_numpy_array(self):
     inputs = xarray_jax.DataArray(
         data=jnp.ones((2,), dtype=np.float32), dims=('foo',))
@@ -226,6 +235,36 @@ class XarrayJaxTest(absltest.TestCase):
     self.assertEqual(inputs.foo.dims, outputs.foo.dims)
     self.assertEqual(inputs.bar.dims, outputs.bar.dims)
     chex.assert_trees_all_equal(outputs.coords, inputs.coords)
+
+  def test_jit_function_with_xarray_datatree_arguments_and_return(self):
+    parent_dataset = xarray_jax.Dataset(
+        jax_coords={'time': xarray_jax.Variable(('time',), np.arange(2))},
+        coords={'lon': xarray.Variable(('lon',), np.arange(4) * 10)})
+
+    bar = jnp.ones((2, 3, 4), dtype=np.float32)
+    child_dataset = xarray_jax.Dataset(
+        {'bar': (('time', 'lat', 'lon'), bar)},
+        coords={'lat': np.arange(3)})
+
+    inputs = xarray.DataTree(
+        dataset=parent_dataset,
+        children={'child': xarray.DataTree(dataset=child_dataset)})
+
+    @jax.jit
+    def fn(inputs):
+      return xarray.DataTree(
+          dataset=xarray_jax.assign_jax_coords(
+              inputs.to_dataset(), time=inputs.time + 1),
+          children={'child': xarray.DataTree(
+              dataset=inputs.children['child'].to_dataset() + 1)})
+
+    _ = fn(inputs)
+    outputs = fn(inputs)
+    self.assertEqual({'child'}, outputs.children.keys())
+    self.assertEqual({'time', 'lon'}, outputs.coords.keys())
+    self.assertIsInstance(
+        outputs.coords['time'].data, xarray_jax.JaxArrayWrapper)
+    self.assertEqual({'bar'}, outputs.child.data_vars.keys())
 
   def test_jit_function_with_dataset_and_jax_coords(self):
     foo = jnp.ones((3, 4), dtype=np.float32)
@@ -323,6 +362,29 @@ class XarrayJaxTest(absltest.TestCase):
     self.assertEqual(aux, aux)
     roundtrip = xarray_jax._unflatten_dataset(aux, children)
     self.assertTrue(dataset.equals(roundtrip))
+
+  def test_flatten_unflatten_datatree(self):
+    # Coords to be inherited from the parent dataset, we include one jax
+    # coord and one not to check both code paths
+    parent_dataset = xarray_jax.Dataset(
+        jax_coords={'time': xarray_jax.Variable(('time',), np.arange(2))},
+        coords={'lon': xarray.Variable(('lon',), np.arange(4) * 10)})
+
+    bar = jnp.ones((2, 3, 4), dtype=np.float32)
+    child_dataset = xarray_jax.Dataset(
+        {'bar': (('time', 'lat', 'lon'), bar)},
+        coords={'lat': np.arange(3)})
+
+    datatree = xarray.DataTree(
+        dataset=parent_dataset,
+        children={'child': xarray.DataTree(dataset=child_dataset)})
+
+    children, aux = xarray_jax._flatten_datatree(datatree)
+    # Check auxiliary info is hashable/comparable (important for jax.jit):
+    hash(aux)
+    self.assertEqual(aux, aux)
+    roundtrip = xarray_jax._unflatten_datatree(aux, children)
+    self.assertTrue(datatree.equals(roundtrip))
 
   def test_flatten_unflatten_added_dim(self):
     data_array = xarray_jax.DataArray(
@@ -521,6 +583,104 @@ class XarrayJaxTest(absltest.TestCase):
     )
     xarray.testing.assert_identical(expected[0], jax.device_get(result[0]))
     xarray.testing.assert_identical(expected[1], jax.device_get(result[1]))
+
+  def test_eval_shape_with_xarray(self):
+    # This needs jax.ShapeDtypeStruct to be wrappable inside xarray types.
+    function = jax.jit(lambda v: v + 1)
+    inputs = xarray_jax.Variable(
+        ('lat', 'lon'), jnp.ones((3, 4), dtype=np.float32))
+    output_shapes = jax.eval_shape(function, inputs)
+    self.assertIsInstance(output_shapes, xarray.Variable)
+    self.assertEqual(output_shapes.shape, (3, 4))
+    self.assertEqual(output_shapes.dtype, np.float32)
+
+  def test_scan(self):
+    def f(carry, x):
+      dataset_input, plain_jax_input = x
+      self.assertEqual(plain_jax_input.shape, ())
+      self.assertEqual(dataset_input.sizes, {'x': 2})  # No 'time' dimension.
+      carry = carry + 1
+      y = dataset_input + carry
+      return carry, y
+
+    dataset_inputs = xarray_jax.Dataset(
+        data_vars={
+            # Put the scan dimension (time) second to make sure it transposes
+            # the array appropriately for JAX which requires scan dim first.
+            'foo': (('x', 'time'), jnp.zeros((2, 5))),
+        },
+        coords={
+            'x': np.arange(2),
+            'time': np.arange(5) * 10,
+        },
+        jax_coords={
+            'time_extra': (('time',), np.arange(5)*2),
+        })
+    # These must have scan dimension first:
+    plain_jax_inputs = jnp.zeros((5,))
+
+    carry, result = xarray_jax.scan(f,
+                                    init=0,
+                                    xs=(dataset_inputs, plain_jax_inputs),
+                                    dim='time')
+    self.assertEqual(jax.device_get(carry), 5)
+    self.assertEqual(result.foo.sizes, {'x': 2, 'time': 5})
+    self.assertIn('x', result.coords)
+    # Unfortunately static coordinates along the dimension we scan over will
+    # not be preserved on the result:
+    self.assertNotIn('time', result.coords)
+    # The jax_coord along time will still be present though:
+    np.testing.assert_array_equal(
+        jax.device_get(result.foo.coords['time_extra'].data),
+        jax.device_get(dataset_inputs.coords['time_extra'].data))
+
+  def test_scan_no_inputs(self):
+    def f(carry, x):
+      assert x is None
+      carry = carry + 1
+      y = carry * 10
+      # Set a jax_coord on the output to check it maps through to the result
+      # correctly:
+      y = xarray_jax.assign_jax_coords(y, extra_coord=carry[0])
+      return carry, y
+
+    init = xarray_jax.DataArray(data=np.zeros(2), dims=('x',))
+    carry, result = xarray_jax.scan(f, init=init, length=5, dim='time')
+    np.testing.assert_array_equal(jax.device_get(carry), [5, 5])
+    self.assertEqual(result.sizes, {'x': 2, 'time': 5})
+    np.testing.assert_array_equal(jax.device_get(result.extra_coord.data),
+                                  [1, 2, 3, 4, 5])
+
+  def test_assign_coords_arg_types(self):
+    # Check we can assign coords with a variety of shorthands mirroring those
+    # supported by xarray's own APIs:
+    result = xarray_jax.assign_coords(
+        xarray_jax.Dataset(),
+        jax_coords={
+            'a': np.arange(2),
+            'b': jnp.arange(2),
+            'c': [0, 1],
+            'd': 123,
+            'e': xarray_jax.Variable(('e2',), np.arange(2)),
+            'f': xarray_jax.DataArray(data=np.arange(2), dims=('f2',)),
+            'g': (('g2',), np.arange(2)),
+        })
+    xarray.testing.assert_equal(
+        result.a.variable, xarray.Variable(('a',), np.arange(2)))
+    xarray.testing.assert_equal(
+        jax.device_get(result.b.variable),
+        xarray.Variable(('b',), np.arange(2)))
+    xarray.testing.assert_equal(
+        result.c.variable, xarray.Variable(('c',), np.arange(2)))
+    xarray.testing.assert_equal(
+        result.d.variable, xarray.Variable((), 123))
+    xarray.testing.assert_equal(
+        result.e.variable, xarray.Variable(('e2',), np.arange(2)))
+    xarray.testing.assert_equal(
+        result.f.variable, xarray.Variable(('f2',), np.arange(2)))
+    xarray.testing.assert_equal(
+        result.g.variable, xarray.Variable(('g2',), np.arange(2)))
+
 
 if __name__ == '__main__':
   absltest.main()

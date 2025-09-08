@@ -366,13 +366,16 @@ def chunked_prediction_generator(
       current_forcings = jax.device_get(current_forcings)
       current_inputs = jax.device_get(current_inputs)
 
-    next_frame = xarray.merge([predictions, current_forcings])
-
-    next_inputs = _get_next_inputs(current_inputs, next_frame)
-
-    # Shift timedelta coordinates, so we don't recompile at every iteration.
-    next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
-    current_inputs = next_inputs
+    if chunk_index == num_chunks - 1:
+      # No need to call `_get_next_inputs` on the last iteration.
+      current_inputs = None
+    else:
+      next_frame = xarray.merge([predictions, current_forcings])
+      next_inputs = _get_next_inputs(current_inputs, next_frame)
+      # Shift timedelta coordinates, so we don't recompile at every iteration.
+      next_inputs = next_inputs.assign_coords(
+          time=current_inputs.coords["time"])
+      current_inputs = next_inputs
 
     # At this point we can assign the actual targets time coordinates.
     predictions = predictions.assign_coords(time=actual_target_time)

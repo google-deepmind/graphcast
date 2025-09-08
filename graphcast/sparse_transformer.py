@@ -531,7 +531,7 @@ class Transformer(hk.Module):
         self.mask = splash_attention.splash_attention_mask.MultiHeadMask(
             splash_mask)
       elif mask_type == 'full':
-        self.mask = mask.toarray()
+        self.mask = mask.toarray()  # pytype: disable=attribute-error
     elif attention_type == 'mha':
       self.mask = jnp.array(mask.toarray())
       self.num_padding_nodes = 0

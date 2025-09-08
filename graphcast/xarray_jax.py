@@ -115,7 +115,7 @@ import xarray
 # leaves of pytrees, in order to ensure we can still use xarray datatypes as
 # internal pytree nodes in these cases.
 _WRAPPED_TYPES = (
-    jax.Array, jax.ShapeDtypeStruct, jax.stages.ArgInfo, jax.stages.OutInfo)
+    jax.Array, jax.ShapeDtypeStruct, jax.stages.ArgInfo)
 
 
 def Variable(dims, data, **kwargs) -> xarray.Variable:  # pylint:disable=invalid-name

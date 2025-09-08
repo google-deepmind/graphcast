@@ -17,13 +17,13 @@ SECTION3 = np.array([0, 1038240, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1440, 721, 0, -1,
 
 
 class Netcdf2Grib:
-    def __init__(self, start_date, case_name="mlgfs"):
+    def __init__(self, start_date, case_name="aigfs"):
         self.case_name = case_name
 
-        if self.case_name == "mlgfs":
-            table_file = "utils/tables_mlgfs.json"
-        elif self.case_name.startswith("mlge"):
-            table_file = "utils/tables_mlgefs.json"
+        if self.case_name == "aigfs":
+            table_file = "utils/tables_aigfs.json"
+        elif self.case_name.startswith("aige"):
+            table_file = "utils/tables_aigefs.json"
         else:
             raise ValueError(f"name {self.case_name} is not supported!")
 
@@ -53,7 +53,7 @@ class Netcdf2Grib:
             setattr(msg, k, v)
 
         # Set GRIB2 attributes for ensemble members
-        if self.case_name.startswith("mlge"):
+        if self.case_name.startswith("aige"):
             number = int(self.case_name[-2:])
             msg.perturbationNumber = number
             if "c00" in self.case_name:
@@ -75,7 +75,7 @@ class Netcdf2Grib:
 
     def save_grib2(self, xarray_ds, outdir):
 
-        prefix = "aigefs" if self.case_name.startswith("mlge") else "aigfs"
+        prefix = "aigefs" if self.case_name.startswith("aige") else "aigfs"
 
         # Convert geopotential to geopotential height.
         xarray_ds["geopotential"] = xarray_ds["geopotential"] / 9.80665
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     
     start_date = pd.to_datetime("2025-07-30 06:00:00")
     ds = xr.open_dataset("forecasts_levels-13_steps-64.nc")
-    g2prefix = "mlgec00"
+    g2prefix = "aigec00"
 
     t0 = time()
     outdir = "./"

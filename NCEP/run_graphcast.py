@@ -262,7 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--input", help="input file path (including file name)", required=True)
     parser.add_argument("-w", "--weights", help="parent directory of the graphcast params and stats", required=True)
     parser.add_argument("-l", "--length", help="length of forecast (6-hourly), an integer number in range [1, 40]", required=True)
-    parser.add_argument("-n", "--case_name", help="mlgfs, or gefs member [mlgec00, mlgep01, ..., mlgep30]", required=True)
+    parser.add_argument("-n", "--case_name", help="gifs, or gefs member [aigec00, aigep01, ..., aigep30]", required=True)
     #parser.add_argument("-c", "--config", help="GC weight member file", required=True)
     parser.add_argument("-c", "--config", help="GC weight member file", default=None)
     parser.add_argument("-o", "--output", help="output directory", default=None)

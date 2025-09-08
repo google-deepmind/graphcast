@@ -14,7 +14,6 @@
 """Utils for rolling out models."""
 
 from typing import Iterator, Optional, Sequence
-import time
 
 from absl import logging
 import chex
@@ -123,7 +122,7 @@ def chunked_prediction_generator_multiple_runs(
     for i in range(0, num_samples, len(pmap_devices)):
       sample_idx = slice(i, i + len(pmap_devices))
       logging.info("Samples %s out of %s", sample_idx, num_samples)
-      #logging.flush()
+      logging.flush()
       sample_group_rngs = rngs[sample_idx]
 
       if "sample" not in inputs.dims:
@@ -177,7 +176,7 @@ def chunked_prediction_generator_multiple_runs(
   else:
     for i in range(num_samples):
       logging.info("Sample %d/%d", i, num_samples)
-      #logging.flush()
+      logging.flush()
       this_sample_rng = rngs[i]
 
       if "sample" in inputs.dims:

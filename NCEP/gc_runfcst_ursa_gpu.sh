@@ -35,7 +35,7 @@ echo "Model weights and stats are at: $model_weights"
 start_time=$(date +%s)
 echo "start runing graphcast to get real time 10-days forecasts for: $curr_datetime"
 
-numactl --interleave=all python run_graphcast.py -i aigfs.$PDY/$cyc/aigfs.t06z.ic.nc -w $model_weights -n mlgfs -l "$forecast_length" -p "$num_pressure_levels" -o aigfs.$PDY/$cyc -u no -k yes
+numactl --interleave=all python run_graphcast.py -i aigfs.$PDY/$cyc/aigfs.t${cyc}z.ic.nc -w $model_weights -n aigfs -l "$forecast_length" -p "$num_pressure_levels" -o aigfs.$PDY/$cyc -u no -k yes
 
 end_time=$(date +%s)  # Record the end time in seconds since the epoch
 

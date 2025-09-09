@@ -1,4 +1,4 @@
-name: graphcast
+name: mlglobal
 channels:
   - conda-forge
 dependencies:
@@ -8,12 +8,9 @@ dependencies:
   - xarray
   - cartopy
   - boto3
-  - pygrib
-  - eccodes
-  - iris
-  - iris-grib
+  - nceplibs-g2c
+  - grib2io
   - jupyterlab
   - pip
   - pip:
-    - https://github.com/deepmind/graphcast/archive/master.zip
     - flax

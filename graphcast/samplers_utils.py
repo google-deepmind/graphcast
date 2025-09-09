@@ -424,8 +424,13 @@ def apply_stochastic_churn(
   """Returns x at higher noise level, and the higher noise level itself."""
   # We increase the noise level of x a bit before taking it down again:
   new_noise_level = noise_level * (1.0 + stochastic_churn_rate)
-  extra_noise_stddev = (jnp.sqrt(new_noise_level**2 - noise_level**2)
-                        * noise_level_inflation_factor)
+  noise_diff = new_noise_level**2 - noise_level**2
+  # stochastic_churn_rate == 0 => new_noise_level == noise_level
+  # => noise_diff == 0. This can resolve to a negative value because of
+  # floating point rounding errors. To avoid this we clamp noise_diff to zero if
+  # it's negative.
+  noise_diff = jnp.maximum(noise_diff, 0)
+  extra_noise_stddev = jnp.sqrt(noise_diff)* noise_level_inflation_factor
   updated_x = x + spherical_white_noise_like(x) * extra_noise_stddev
   return updated_x, new_noise_level
 

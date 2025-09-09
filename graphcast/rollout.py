@@ -25,7 +25,6 @@ import numpy as np
 import typing_extensions
 import xarray
 
-
 class PredictorFn(typing_extensions.Protocol):
   """Functional version of base.Predictor.__call__ with explicit rng."""
 
@@ -108,8 +107,8 @@ def chunked_prediction_generator_multiple_runs(
   """
   if pmap_devices is not None:
     assert (
-        num_samples % jax.device_count() == 0
-    ), "num_samples must be a multiple of jax.device_count()"
+        num_samples % len(pmap_devices) == 0
+    ), "num_samples must be a multiple of len(pmap_devices)"
 
     def predictor_fn_pmap_named_args(rng, inputs, targets_template, forcings):
       targets_template = _replicate_dataset(
@@ -120,8 +119,8 @@ def chunked_prediction_generator_multiple_runs(
       )
       return predictor_fn(rng, inputs, targets_template, forcings)
 
-    for i in range(0, num_samples, jax.device_count()):
-      sample_idx = slice(i, i + jax.device_count())
+    for i in range(0, num_samples, len(pmap_devices)):
+      sample_idx = slice(i, i + len(pmap_devices))
       logging.info("Samples %s out of %s", sample_idx, num_samples)
       logging.flush()
       sample_group_rngs = rngs[sample_idx]
@@ -203,6 +202,8 @@ def chunked_prediction_generator_multiple_runs(
 
 
 def chunked_prediction(
+    outdir: str,
+    converter,
     predictor_fn: PredictorFn,
     rng: chex.PRNGKey,
     inputs: xarray.Dataset,
@@ -229,7 +230,25 @@ def chunked_prediction(
     Predictions for the targets template.
 
   """
+  '''Keep original code
   chunks_list = []
+  for i, prediction_chunk in enumerate(chunked_prediction_generator(
+      predictor_fn=predictor_fn,
+      rng=rng,
+      inputs=inputs,
+      targets_template=targets_template,
+      forcings=forcings,
+      num_steps_per_chunk=num_steps_per_chunk,
+      verbose=verbose)):
+
+    chunks_list.append(jax.device_get(prediction_chunk))
+  return xarray.concat(chunks_list, dim="time")
+  '''
+
+  tp_cum = jax.device_get(targets_template['total_precipitation_6hr']).isel(time=slice(0,1)).values
+  #tp in templat is filled with nan, change to 0
+  tp_cum[:] = 0
+
   for prediction_chunk in chunked_prediction_generator(
       predictor_fn=predictor_fn,
       rng=rng,
@@ -238,9 +257,15 @@ def chunked_prediction(
       forcings=forcings,
       num_steps_per_chunk=num_steps_per_chunk,
       verbose=verbose):
-    chunks_list.append(jax.device_get(prediction_chunk))
-  return xarray.concat(chunks_list, dim="time")
 
+      #make a copy of prediction_chunk to save to file
+      prediction = jax.device_get(prediction_chunk).copy(deep=True)
+      tp_cum = tp_cum + prediction['total_precipitation_6hr'].values
+      prediction['total_precipitation_cumsum'] = (['batch', 'time', 'lat', 'lon'], tp_cum)
+    
+      converter.save_grib2(prediction, outdir)
+
+      del prediction
 
 def chunked_prediction_generator(
     predictor_fn: PredictorFn,
@@ -292,7 +317,7 @@ def chunked_prediction_generator(
   if "datetime" in forcings.coords:
     del forcings.coords["datetime"]
 
-  num_target_steps = targets_template.dims["time"]
+  num_target_steps = targets_template.sizes["time"]
   num_chunks, remainder = divmod(num_target_steps, num_steps_per_chunk)
   if remainder != 0:
     raise ValueError(
@@ -340,8 +365,10 @@ def chunked_prediction_generator(
     current_forcings = forcings.isel(time=target_slice)
     current_forcings = current_forcings.assign_coords(time=targets_chunk_time)
     current_forcings = current_forcings.compute()
+
     # Make predictions for the chunk.
     rng, this_rng = split_rng_fn(rng)
+
     predictions = predictor_fn(
         rng=this_rng,
         inputs=current_inputs,
@@ -359,13 +386,16 @@ def chunked_prediction_generator(
       current_forcings = jax.device_get(current_forcings)
       current_inputs = jax.device_get(current_inputs)
 
-    next_frame = xarray.merge([predictions, current_forcings])
-
-    next_inputs = _get_next_inputs(current_inputs, next_frame)
-
-    # Shift timedelta coordinates, so we don't recompile at every iteration.
-    next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
-    current_inputs = next_inputs
+    if chunk_index == num_chunks - 1:
+      # No need to call `_get_next_inputs` on the last iteration.
+      current_inputs = None
+    else:
+      next_frame = xarray.merge([predictions, current_forcings])
+      next_inputs = _get_next_inputs(current_inputs, next_frame)
+      # Shift timedelta coordinates, so we don't recompile at every iteration.
+      next_inputs = next_inputs.assign_coords(
+          time=current_inputs.coords["time"])
+      current_inputs = next_inputs
 
     # At this point we can assign the actual targets time coordinates.
     predictions = predictions.assign_coords(time=actual_target_time)
@@ -394,10 +424,10 @@ def _get_next_inputs(
   next_inputs = next_frame[next_inputs_keys]
 
   # Apply concatenate next frame with inputs, crop what we don't need.
-  num_inputs = prev_inputs.dims["time"]
+  num_inputs = prev_inputs.sizes["time"]
   return (
       xarray.concat(
-          [prev_inputs, next_inputs], dim="time", data_vars="different")
+          [prev_inputs, next_inputs], dim="time", data_vars="different", compat="equals")
       .tail(time=num_inputs))
 
 

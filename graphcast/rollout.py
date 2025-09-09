@@ -230,7 +230,25 @@ def chunked_prediction(
     Predictions for the targets template.
 
   """
-  #chunks_list = []
+  '''Keep original code
+  chunks_list = []
+  for i, prediction_chunk in enumerate(chunked_prediction_generator(
+      predictor_fn=predictor_fn,
+      rng=rng,
+      inputs=inputs,
+      targets_template=targets_template,
+      forcings=forcings,
+      num_steps_per_chunk=num_steps_per_chunk,
+      verbose=verbose)):
+
+    chunks_list.append(jax.device_get(prediction_chunk))
+  return xarray.concat(chunks_list, dim="time")
+  '''
+
+  tp_cum = jax.device_get(targets_template['total_precipitation_6hr']).isel(time=slice(0,1)).values
+  #tp in templat is filled with nan, change to 0
+  tp_cum[:] = 0
+
   for prediction_chunk in chunked_prediction_generator(
       predictor_fn=predictor_fn,
       rng=rng,
@@ -240,11 +258,14 @@ def chunked_prediction(
       num_steps_per_chunk=num_steps_per_chunk,
       verbose=verbose):
 
-    converter.save_grib2(prediction_chunk, outdir)
+      #make a copy of prediction_chunk to save to file
+      prediction = jax.device_get(prediction_chunk).copy(deep=True)
+      tp_cum = tp_cum + prediction['total_precipitation_6hr'].values
+      prediction['total_precipitation_cumsum'] = (['batch', 'time', 'lat', 'lon'], tp_cum)
+    
+      converter.save_grib2(prediction, outdir)
 
-    #chunks_list.append(jax.device_get(prediction_chunk))
-  #return xarray.concat(chunks_list, dim="time")
-
+      del prediction
 
 def chunked_prediction_generator(
     predictor_fn: PredictorFn,

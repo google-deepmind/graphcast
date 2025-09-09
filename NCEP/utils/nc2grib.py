@@ -80,10 +80,10 @@ class Netcdf2Grib:
         # Convert geopotential to geopotential height.
         xarray_ds["geopotential"] = xarray_ds["geopotential"] / 9.80665
 
-        # Successively accumulate 6-hr precip.
+        # Update total_precipitation unit to (kg/m^2)
         if "total_precipitation_6hr" in xarray_ds:
             xarray_ds["total_precipitation_6hr"] = xarray_ds["total_precipitation_6hr"].clip(min=0) * 1000
-            xarray_ds["total_precipitation_cumsum"] = xarray_ds["total_precipitation_6hr"].cumsum(axis=0)
+            xarray_ds["total_precipitation_cumsum"] = xarray_ds["total_precipitation_cumsum"].clip(min=0) * 1000
 
         # Convert levels values from mb to Pa.
         xarray_ds["level"] = xarray_ds["level"] * 100 # Convert mb to Pa

@@ -19,7 +19,7 @@ from graphcast import typed_graph
 import jax.numpy as jnp
 import jax.tree_util as tree
 import jraph
-
+import jax.debug
 
 # All features will be an ArrayTree.
 NodeFeatures = EdgeFeatures = SenderFeatures = ReceiverFeatures = Globals = (

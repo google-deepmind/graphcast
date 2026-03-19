@@ -1,0 +1,25 @@
+{
+  "// Data Parameters": "------------------------",
+  "data_choice": "ERA5_provide",
+  "time_interval": "6h",
+  "date_mode": "specific",
+  "target_date_list": [
+    "2016-10-03",
+    "2016-10-04",
+    "2016-10-06"
+  ],
+  "process_all_dates": true,
+  
+  "// Model Parameters": "------------------------",
+  "num_ensemble_members": 1,
+  
+  "// ReadOut Parameters": "------------------------",
+  "enable_readout": true,
+  "extract_features": true,
+  "extract_step": 6,
+  
+  "// Output Parameters": "------------------------",
+  "save_root": "/fs/nexus-projects/DeepOptic_Ev/16_WeatherControl/gencast_output/readout_features",
+  "save_features": false,
+  "save_predictions": true
+}

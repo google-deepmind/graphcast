@@ -65,7 +65,6 @@ class MeshTransformer(hk.Module):
                transformer_kwargs: Kwargs,
                name: Optional[str] = None):
     """Initialises the Transformer model.
-
     Args:
       transformer_ctor: Constructor for transformer.
       transformer_kwargs: Kwargs to pass to the transformer module.

@@ -132,13 +132,6 @@ def featurize_progress(
   }
 
 
-def get_seconds_since_epoch(datetime_sequence: xarray.DataArray) -> np.ndarray:
-  """Computes seconds since epoch from `data` in place if missing."""
-  # Note `datetime_sequence.astype("datetime64[s]").astype(np.int64)`
-  # does not work as xarrays always cast dates into nanoseconds!
-  return datetime_sequence.data.astype("datetime64[s]").astype(np.int64)
-
-
 def add_derived_vars(data: xarray.Dataset) -> None:
   """Adds year and day progress features to `data` in place if missing.
 
@@ -154,7 +147,11 @@ def add_derived_vars(data: xarray.Dataset) -> None:
       raise ValueError(f"'{coord}' must be in `data` coordinates.")
 
   # Compute seconds since epoch.
-  seconds_since_epoch = get_seconds_since_epoch(data.coords["datetime"])
+  # Note `data.coords["datetime"].astype("datetime64[s]").astype(np.int64)`
+  # does not work as xarrays always cast dates into nanoseconds!
+  seconds_since_epoch = (
+      data.coords["datetime"].data.astype("datetime64[s]").astype(np.int64)
+  )
   batch_dim = ("batch",) if "batch" in data.dims else ()
 
   # Add year progress features if missing.
@@ -280,16 +277,23 @@ def extract_input_target_times(
   # This means the time coordinates are now forecast lead times.
   time = dataset.coords["time"]
   dataset = dataset.assign_coords(time=time + target_duration - time[-1])
-
   # Slice out targets:
   targets = dataset.sel({"time": target_lead_times})
+
+
 
   input_duration = pd.Timedelta(input_duration)
   # Both endpoints are inclusive with label-based slicing, so we offset by a
   # small epsilon to make one of the endpoints non-inclusive:
   zero = pd.Timedelta(0)
   epsilon = pd.Timedelta(1, "ns")
+
+
+
+
   inputs = dataset.sel({"time": slice(-input_duration + epsilon, zero)})
+
+
   return inputs, targets
 
 
@@ -330,6 +334,7 @@ def extract_inputs_targets_forcings(
     target_lead_times: TargetLeadTimes,
     ) -> Tuple[xarray.Dataset, xarray.Dataset, xarray.Dataset]:
   """Extracts inputs, targets and forcings according to requirements."""
+
   dataset = dataset.sel(level=list(pressure_levels))
 
   # "Forcings" include derived variables that do not exist in the original ERA5

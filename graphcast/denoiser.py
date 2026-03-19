@@ -193,6 +193,10 @@ class DenoiserArchitectureConfig:
   grid2mesh_aggregate_normalization: Optional[float] = None
   node_output_size: Optional[int] = None
 
+@chex.dataclass(eq=True)
+class ReadOutDenoiserArchitectureConfig(DenoiserArchitectureConfig):
+  ReadOut_flag: bool = True
+
 
 class Denoiser(base.Denoiser):
   """Wraps a general deterministic Predictor to act as a Denoiser.
@@ -210,6 +214,7 @@ class Denoiser(base.Denoiser):
       noise_encoder_config: Optional[NoiseEncoderConfig],
       denoiser_architecture_config: DenoiserArchitectureConfig,
   ):
+
     self._predictor = _DenoiserArchitecture(
         denoiser_architecture_config=denoiser_architecture_config,
     )
@@ -225,6 +230,7 @@ class Denoiser(base.Denoiser):
       noise_levels: xarray.DataArray,
       forcings: Optional[xarray.Dataset] = None,
       **kwargs) -> xarray.Dataset:
+
     if forcings is None: forcings = xarray.Dataset()
     forcings = forcings.assign(noisy_targets)
 
@@ -233,10 +239,12 @@ class Denoiser(base.Denoiser):
     noise_level_encodings = self._noise_level_encoder(
         xarray_jax.unwrap_data(noise_levels)
     )
+
     noise_level_encodings = xarray_jax.Variable(
         ("batch", "noise_level_encoding_channels"), noise_level_encodings
     )
     inputs = inputs.assign(noise_level_encodings=noise_level_encodings)
+    
 
     return self._predictor(
         inputs=inputs,
@@ -278,6 +286,9 @@ class _DenoiserArchitecture:
       self,
       denoiser_architecture_config: DenoiserArchitectureConfig,
   ):
+
+    self.ReadOut_flag = denoiser_architecture_config["ReadOut_flag"]
+
     """Initializes the predictor."""
     self._spatial_features_kwargs = dict(
         add_node_positions=False,
@@ -394,22 +405,26 @@ class _DenoiserArchitecture:
     self._mesh2grid_graph_structure = None
 
   def __call__(self,
-               inputs: xarray.Dataset,
-               targets_template: xarray.Dataset,
-               forcings: xarray.Dataset,
+               inputs: xarray.Dataset,  # 18 vars
+               targets_template: xarray.Dataset, # 12 vars
+               forcings: xarray.Dataset, # 16 vars
                ) -> xarray.Dataset:
     self._maybe_init(inputs)
-
     # Convert all input data into flat vectors for each of the grid nodes.
     # xarray (batch, time, lat, lon, level, multiple vars, forcings)
     # -> [num_grid_nodes, batch, num_channels]
+
+    # check max of inputs
+
     grid_node_features, global_norm_conditioning = (
         self._inputs_to_grid_node_features_and_norm_conditioning(
             inputs, forcings
         )
     )
 
-    # [num_mesh_nodes, batch, latent_size], [num_grid_nodes, batch, latent_size]
+    
+    # grid_node_features - (65160, 1, 264)
+    # [num_mesh_nodes, batch, latent_size], [num_grid_nodes, batch, latent_size] -- [2562, 1, 512], 65160, 1, 512
     (latent_mesh_nodes, latent_grid_nodes) = self._run_grid2mesh_gnn(
         grid_node_features, global_norm_conditioning
     )
@@ -420,18 +435,50 @@ class _DenoiserArchitecture:
         latent_mesh_nodes, global_norm_conditioning
     )
 
+    
+
+    if self.ReadOut_flag:
+      '''
+      This structure means we could extract features at several points:
+        After each full transformer block
+        After attention but before FFN within each block
+        After individual attention heads
+        At the final output before returning to grid space
+      '''
+      # prepare the input_graph, but didnt run the well-trained GNN
+      readout_output_grid_nodes = self._run_mesh2grid_gnn_4_readout(
+          updated_latent_mesh_nodes, latent_grid_nodes, global_norm_conditioning
+      )
+      # convrt the output_grid_nodes [65160, 1, 84] into res {'lon': 360, 'lat': 181, 'level': 13, 'time': 1, 'batch': 1}
+      readout_res = self._grid_node_outputs_to_prediction(
+          readout_output_grid_nodes, targets_template
+      )
+    
     # Transfer data from the mesh to the grid.
-    # [num_grid_nodes, batch, output_size]
+    # [num_grid_nodes, batch, output_size] -- [65160, 1, 84]
+    # updated_latent_mesh_nodes [2562, 1, 512] --GNN--> output_grid_nodes [65160, 1, 84] 
     output_grid_nodes = self._run_mesh2grid_gnn(
         updated_latent_mesh_nodes, latent_grid_nodes, global_norm_conditioning
     )
-
+    # convrt the output_grid_nodes [65160, 1, 84] into res {'lon': 360, 'lat': 181, 'level': 13, 'time': 1, 'batch': 1}
+    res = self._grid_node_outputs_to_prediction(
+        output_grid_nodes, targets_template
+    )
+    # # check the min max mean of predictions ['2m_temperature'] by jax.debug.print
+    # jax.debug.print("##################### Pred 2m_temperature max: {max}", max=res['2m_temperature'].max())
+    # jax.debug.breakpoint()
+    # jax.debug.print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
     # Convert output flat vectors for the grid nodes to the format of the
     # output. [num_grid_nodes, batch, output_size] -> xarray (batch, one time
     # step, lat, lon, level, multiple vars)
-    return self._grid_node_outputs_to_prediction(
-        output_grid_nodes, targets_template
-    )
+    
+    # jax.debug.breakpoint()
+    if self.ReadOut_flag:
+
+      return res, readout_res
+      # return res, res
+    else:
+      return res, None
 
   def _maybe_init(self, sample_inputs: xarray.Dataset):
     """Inits everything that has a dependency on the input coordinates."""
@@ -711,6 +758,48 @@ class _DenoiserArchitecture:
                           global_norm_conditioning=global_norm_conditioning
                           ).nodes["mesh_nodes"].features
 
+  def _run_mesh2grid_gnn_4_readout(self,
+                         updated_latent_mesh_nodes: chex.Array,
+                         latent_grid_nodes: chex.Array,
+                         global_norm_conditioning: Optional[chex.Array] = None,
+                         ) -> chex.Array:
+    """Runs the mesh2grid_gnn, extracting the output grid nodes."""
+
+    # Add the structural edge features of this graph. Note we don't need
+    # to add the structural node features, because these are already part of
+    # the latent state, via the original Grid2Mesh gnn, however, we need
+    # the edge ones, because it is the first time we are seeing this particular
+    # set of edges.
+    batch_size = updated_latent_mesh_nodes.shape[1]
+
+    mesh2grid_graph = self._mesh2grid_graph_structure
+    assert mesh2grid_graph is not None
+    mesh_nodes = mesh2grid_graph.nodes["mesh_nodes"]
+    grid_nodes = mesh2grid_graph.nodes["grid_nodes"]
+    new_mesh_nodes = mesh_nodes._replace(features=updated_latent_mesh_nodes)
+    new_grid_nodes = grid_nodes._replace(features=latent_grid_nodes)
+    mesh2grid_key = mesh2grid_graph.edge_key_by_name("mesh2grid")
+    edges = mesh2grid_graph.edges[mesh2grid_key]
+
+    new_edges = edges._replace(
+        features=_add_batch_second_axis(
+            edges.features.astype(latent_grid_nodes.dtype), batch_size))
+
+    input_graph = mesh2grid_graph._replace(
+        edges={mesh2grid_key: new_edges},
+        nodes={
+            "mesh_nodes": new_mesh_nodes,
+            "grid_nodes": new_grid_nodes
+        })
+
+    # Run the ReadOut-GNN.
+    output_graph = self._mesh2grid_gnn.readout_out(input_graph, global_norm_conditioning)
+    output_grid_nodes = output_graph.nodes["grid_nodes"].features
+
+    return output_grid_nodes
+
+
+
   def _run_mesh2grid_gnn(self,
                          updated_latent_mesh_nodes: chex.Array,
                          latent_grid_nodes: chex.Array,
@@ -747,6 +836,7 @@ class _DenoiserArchitecture:
 
     # Run the GNN.
     output_graph = self._mesh2grid_gnn(input_graph, global_norm_conditioning)
+
     output_grid_nodes = output_graph.nodes["grid_nodes"].features
 
     return output_grid_nodes
@@ -801,13 +891,12 @@ class _DenoiserArchitecture:
     assert self._grid_lat is not None and self._grid_lon is not None
     grid_shape = (self._grid_lat.shape[0], self._grid_lon.shape[0])
     grid_outputs_lat_lon_leading = grid_node_outputs.reshape(
-        grid_shape + grid_node_outputs.shape[1:])
+        grid_shape + grid_node_outputs.shape[1:]) # [181, 360, 1, 84]
     dims = ("lat", "lon", "batch", "channels")
     grid_xarray_lat_lon_leading = xarray_jax.DataArray(
         data=grid_outputs_lat_lon_leading,
         dims=dims)
-    grid_xarray = model_utils.restore_leading_axes(grid_xarray_lat_lon_leading)
-
+    grid_xarray = model_utils.restore_leading_axes(grid_xarray_lat_lon_leading) # [1, 181, 360, 84]
     # xarray `DataArray` (batch, lat, lon, channels)
     # to xarray `Dataset` (batch, one time step, lat, lon, level, multiple vars)
     return model_utils.stacked_to_dataset(

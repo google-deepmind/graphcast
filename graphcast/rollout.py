@@ -13,7 +13,7 @@
 # limitations under the License.
 """Utils for rolling out models."""
 
-from typing import Iterator, Optional, Sequence
+from typing import Iterator, Optional, Sequence, Tuple, Dict
 
 from absl import logging
 import chex
@@ -24,6 +24,7 @@ import jax
 import numpy as np
 import typing_extensions
 import xarray
+from graphcast import typed_graph
 
 
 class PredictorFn(typing_extensions.Protocol):
@@ -340,6 +341,8 @@ def chunked_prediction_generator(
     current_forcings = forcings.isel(time=target_slice)
     current_forcings = current_forcings.assign_coords(time=targets_chunk_time)
     current_forcings = current_forcings.compute()
+
+
     # Make predictions for the chunk.
     rng, this_rng = split_rng_fn(rng)
     predictions = predictor_fn(
@@ -347,7 +350,8 @@ def chunked_prediction_generator(
         inputs=current_inputs,
         targets_template=current_targets_template,
         forcings=current_forcings)
-
+    
+    
     # In the pmapped case, profiling reveals that the predictions, forcings and
     # inputs are all copied onto a single TPU, causing OOM. To avoid this
     # we pull all of the input/output data off the devices. This will have
@@ -359,22 +363,21 @@ def chunked_prediction_generator(
       current_forcings = jax.device_get(current_forcings)
       current_inputs = jax.device_get(current_inputs)
 
-    if chunk_index == num_chunks - 1:
-      # No need to call `_get_next_inputs` on the last iteration.
-      current_inputs = None
-    else:
-      next_frame = xarray.merge([predictions, current_forcings])
-      next_inputs = _get_next_inputs(current_inputs, next_frame)
-      # Shift timedelta coordinates, so we don't recompile at every iteration.
-      next_inputs = next_inputs.assign_coords(
-          time=current_inputs.coords["time"])
-      current_inputs = next_inputs
+    next_frame = xarray.merge([predictions, current_forcings])
+
+    next_inputs = _get_next_inputs(current_inputs, next_frame)
+
+    # Shift timedelta coordinates, so we don't recompile at every iteration.
+    next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
+    current_inputs = next_inputs
 
     # At this point we can assign the actual targets time coordinates.
     predictions = predictions.assign_coords(time=actual_target_time)
+
     if output_datetime is not None:
       predictions.coords["datetime"] = output_datetime.isel(
           time=target_slice)
+
     yield predictions
     del predictions
 
@@ -382,26 +385,26 @@ def chunked_prediction_generator(
 def _get_next_inputs(
     prev_inputs: xarray.Dataset, next_frame: xarray.Dataset,
     ) -> xarray.Dataset:
-  """Computes next inputs, from previous inputs and predictions."""
 
-  # Make sure are are predicting all inputs with a time axis.
-  non_predicted_or_forced_inputs = list(
-      set(prev_inputs.keys()) - set(next_frame.keys()))
-  if "time" in prev_inputs[non_predicted_or_forced_inputs].dims:
-    raise ValueError(
-        "Found an input with a time index that is not predicted or forced.")
 
-  # Keys we need to copy from predictions to inputs.
-  next_inputs_keys = list(
-      set(next_frame.keys()).intersection(set(prev_inputs.keys())))
-  next_inputs = next_frame[next_inputs_keys]
+    # Make sure we are predicting all inputs with a time axis.
+    non_predicted_or_forced_inputs = list(
+        set(prev_inputs.keys()) - set(next_frame.keys()))
+    if "time" in prev_inputs[non_predicted_or_forced_inputs].dims:
+        raise ValueError(
+            "Found an input with a time index that is not predicted or forced.")
 
-  # Apply concatenate next frame with inputs, crop what we don't need.
-  num_inputs = prev_inputs.dims["time"]
-  return (
-      xarray.concat(
-          [prev_inputs, next_inputs], dim="time", data_vars="different")
-      .tail(time=num_inputs))
+    # Keys we need to copy from predictions to inputs.
+    next_inputs_keys = list(
+        set(next_frame.keys()).intersection(set(prev_inputs.keys())))
+    next_inputs = next_frame[next_inputs_keys]
+
+    # Apply concatenate next frame with inputs, crop what we don't need.
+    num_inputs = prev_inputs.dims["time"]
+    return (
+        xarray.concat(
+            [prev_inputs, next_inputs], dim="time", data_vars="different")
+        .tail(time=num_inputs))
 
 
 def extend_targets_template(
@@ -462,3 +465,530 @@ def extend_targets_template(
         coords=coords)
 
   return xarray_tree.map_structure(extend_time, targets_template)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'''
+Readout Inference
+'''
+def chunked_prediction_readout_generator_multiple_runs(
+    predictor_fn: PredictorFn,
+    rngs: chex.PRNGKey,
+    inputs: xarray.Dataset,
+    targets_template: xarray.Dataset,
+    forcings: Optional[xarray.Dataset],
+    num_samples: Optional[int],
+    pmap_devices: Optional[Sequence[jax.Device]] = None,
+    **chunked_prediction_kwargs,
+) -> Iterator[xarray.Dataset]:
+  """Outputs a trajectory of multiple samples by yielding chunked predictions.
+
+  Args:
+    predictor_fn: Function to use to make predictions for each chunk.
+    rngs: RNG sequence to be used for each ensemble member.
+    inputs: Inputs for the model.
+    targets_template: Template for the target prediction, requires targets
+        equispaced in time.
+    forcings: Optional forcing for the model.
+    num_samples: The number of runs / samples to rollout.
+    pmap_devices: List of devices over which predictor_fn is pmapped, or None if
+      it is not pmapped.
+    **chunked_prediction_kwargs:
+      See chunked_prediction, some of these are required arguments.
+
+  Yields:
+    The predictions for each chunked step of the chunked rollout, such that
+    if all predictions are concatenated in time and sample dimension squeezed,
+    this would match the targets template in structure.
+
+  """
+  if pmap_devices is not None:
+    assert (
+        num_samples % len(pmap_devices) == 0
+    ), "num_samples must be a multiple of len(pmap_devices)"
+
+    def predictor_fn_pmap_named_args(rng, inputs, targets_template, forcings):
+      targets_template = _replicate_dataset(
+          targets_template,
+          replica_dim="sample",
+          replicate_to_device=True,
+          devices=pmap_devices,
+      )
+      res = predictor_fn(rng, inputs, targets_template, forcings)
+
+      return res
+
+    for i in range(0, num_samples, len(pmap_devices)):
+      sample_idx = slice(i, i + len(pmap_devices))
+      logging.info("Samples %s out of %s", sample_idx, num_samples)
+      logging.flush()
+      sample_group_rngs = rngs[sample_idx]
+
+      if "sample" not in inputs.dims:
+        sample_inputs = inputs
+      else:
+        sample_inputs = inputs.isel(sample=sample_idx, drop=True)
+
+      sample_inputs = _replicate_dataset(
+          sample_inputs,
+          replica_dim="sample",
+          replicate_to_device=True,
+          devices=pmap_devices,
+      )
+
+      if forcings is not None:
+        if "sample" not in forcings.dims:
+          sample_forcings = forcings
+        else:
+          sample_forcings = forcings.isel(sample=sample_idx, drop=True)
+
+        # TODO(pricei): We are replicating the full forcings for all rollout
+        # timesteps here, rather than inside `predictor_fn_pmap_named_args` like
+        # the targets_template above, because the forcings are concatenated with
+        # the inputs which will already be replicated. We should refactor this
+        # so that chunked prediction is aware of whether it is being run with
+        # pmap, and if so do the replication and device_put only of the
+        # necessary timesteps, as part of the chunked prediction function.
+        sample_forcings = _replicate_dataset(
+            sample_forcings,
+            replica_dim="sample",
+            replicate_to_device=False,
+            devices=pmap_devices,
+        )
+      else:
+        sample_forcings = None
+
+      for prediction_chunk, readout_chunk in chunked_prediction_readout_generator(
+          predictor_fn=predictor_fn_pmap_named_args,
+          rng=sample_group_rngs,
+          inputs=sample_inputs,
+          targets_template=targets_template,
+          forcings=sample_forcings,
+          pmap_devices=pmap_devices,
+          **chunked_prediction_kwargs,
+      ):
+        prediction_chunk.coords["sample"] = np.arange(
+            sample_idx.start, sample_idx.stop, sample_idx.step
+        )
+        for key in readout_chunk.keys():
+          readout_chunk[key].coords["sample"] = np.arange(
+              sample_idx.start, sample_idx.stop, sample_idx.step
+          )
+        yield prediction_chunk, readout_chunk
+        del prediction_chunk, readout_chunk
+  else:
+    for i in range(num_samples):
+      logging.info("Sample %d/%d", i, num_samples)
+      logging.flush()
+      this_sample_rng = rngs[i]
+
+      if "sample" in inputs.dims:
+        sample_inputs = inputs.isel(sample=i, drop=True)
+      else:
+        sample_inputs = inputs
+
+      sample_forcings = forcings
+      if sample_forcings is not None:
+        if "sample" in sample_forcings.dims:
+          sample_forcings = sample_forcings.isel(sample=i, drop=True)
+
+      for prediction_chunk in chunked_prediction_readout_generator(
+          predictor_fn=predictor_fn,
+          rng=this_sample_rng,
+          inputs=sample_inputs,
+          targets_template=targets_template,
+          forcings=sample_forcings,
+          **chunked_prediction_kwargs):
+        prediction_chunk.coords["sample"] = i
+        yield prediction_chunk
+        del prediction_chunk
+
+
+def chunked_prediction_readout(
+    predictor_fn: PredictorFn,
+    rng: chex.PRNGKey,
+    inputs: xarray.Dataset,
+    targets_template: xarray.Dataset,
+    forcings: xarray.Dataset,
+    num_steps_per_chunk: int = 1,
+    verbose: bool = False,
+) -> xarray.Dataset:
+  """Outputs a long trajectory by iteratively concatenating chunked predictions.
+
+  Args:
+    predictor_fn: Function to use to make predictions for each chunk.
+    rng: Random key.
+    inputs: Inputs for the model.
+    targets_template: Template for the target prediction, requires targets
+        equispaced in time.
+    forcings: Optional forcing for the model.
+    num_steps_per_chunk: How many of the steps in `targets_template` to predict
+        at each call of `predictor_fn`. It must evenly divide the number of
+        steps in `targets_template`.
+    verbose: Whether to log the current chunk being predicted.
+
+  Returns:
+    Predictions for the targets template.
+
+  """
+  chunks_list = []
+  for prediction_chunk in chunked_prediction_readout_generator(
+      predictor_fn=predictor_fn,
+      rng=rng,
+      inputs=inputs,
+      targets_template=targets_template,
+      forcings=forcings,
+      num_steps_per_chunk=num_steps_per_chunk,
+      verbose=verbose):
+    chunks_list.append(jax.device_get(prediction_chunk))
+  return xarray.concat(chunks_list, dim="time")
+
+
+def chunked_prediction_readout_generator(
+    predictor_fn: PredictorFn,
+    rng: chex.PRNGKey,
+    inputs: xarray.Dataset,
+    targets_template: xarray.Dataset,
+    forcings: xarray.Dataset,
+    num_steps_per_chunk: int = 1,
+    verbose: bool = False,
+    pmap_devices: Optional[Sequence[jax.Device]] = None
+) -> Iterator[xarray.Dataset]:
+  """Outputs a long trajectory by yielding chunked predictions.
+
+  Args:
+    predictor_fn: Function to use to make predictions for each chunk.
+    rng: Random key.
+    inputs: Inputs for the model.
+    targets_template: Template for the target prediction, requires targets
+        equispaced in time.
+    forcings: Optional forcing for the model.
+    num_steps_per_chunk: How many of the steps in `targets_template` to predict
+        at each call of `predictor_fn`. It must evenly divide the number of
+        steps in `targets_template`.
+    verbose: Whether to log the current chunk being predicted.
+    pmap_devices: List of devices over which predictor_fn is pmapped, or None if
+      it is not pmapped.
+
+  Yields:
+    The predictions for each chunked step of the chunked rollout, such as
+    if all predictions are concatenated in time this would match the targets
+    template in structure.
+
+  """
+
+  # Create copies to avoid mutating inputs.
+  inputs = xarray.Dataset(inputs)
+  targets_template = xarray.Dataset(targets_template)
+  forcings = xarray.Dataset(forcings)
+
+  if "datetime" in inputs.coords:
+    del inputs.coords["datetime"]
+
+  if "datetime" in targets_template.coords:
+    output_datetime = targets_template.coords["datetime"]
+    del targets_template.coords["datetime"]
+  else:
+    output_datetime = None
+
+  if "datetime" in forcings.coords:
+    del forcings.coords["datetime"]
+
+  num_target_steps = targets_template.dims["time"]
+  num_chunks, remainder = divmod(num_target_steps, num_steps_per_chunk)
+  if remainder != 0:
+    raise ValueError(
+        f"The number of steps per chunk {num_steps_per_chunk} must "
+        f"evenly divide the number of target steps {num_target_steps} ")
+
+  if len(np.unique(np.diff(targets_template.coords["time"].data))) > 1:
+    raise ValueError("The targets time coordinates must be evenly spaced")
+
+  # Our template targets will always have a time axis corresponding for the
+  # timedeltas for the first chunk.
+  targets_chunk_time = targets_template.time.isel(
+      time=slice(0, num_steps_per_chunk))
+
+  current_inputs = inputs
+
+  def split_rng_fn(rng):
+    # Note, this is *not* equivalent to `return jax.random.split(rng)`, because
+    # by assigning to a tuple, the single numpy array returned by
+    # `jax.random.split` actually gets split into two arrays, so when calling
+    # the function with pmap the output is Tuple[Array, Array], where the
+    # leading axis of each array is `num devices`.
+    rng1, rng2 = jax.random.split(rng)
+    return rng1, rng2
+
+  if pmap_devices is not None:
+    split_rng_fn = jax.pmap(split_rng_fn, devices=pmap_devices)
+
+  for chunk_index in range(num_chunks):
+    if verbose:
+      logging.info("Chunk %d/%d", chunk_index, num_chunks)
+      logging.flush()
+
+    # Select targets for the time period that we are predicting for this chunk.
+    target_offset = num_steps_per_chunk * chunk_index
+    target_slice = slice(target_offset, target_offset + num_steps_per_chunk)
+    current_targets_template = targets_template.isel(time=target_slice)
+
+    # Replace the timedelta, by the one corresponding to the first chunk, so we
+    # don't recompile at every iteration, keeping the
+    actual_target_time = current_targets_template.coords["time"]
+    current_targets_template = current_targets_template.assign_coords(
+        time=targets_chunk_time).compute()
+
+    current_forcings = forcings.isel(time=target_slice)
+    current_forcings = current_forcings.assign_coords(time=targets_chunk_time)
+    current_forcings = current_forcings.compute()
+
+
+
+    # Make predictions for the chunk.
+    rng, this_rng = split_rng_fn(rng)
+    predictions_readout = predictor_fn(
+        rng=this_rng,
+        inputs=current_inputs,
+        targets_template=current_targets_template,
+        forcings=current_forcings)
+    
+    predictions, readouts = predictions_readout
+    
+  
+
+    ''' 
+  Readout Training
+
+  Sampler - inputs 2m_temperature max:            1.7475021
+  Before first denoiser 2m_temperature mean:     -7.1186113
+
+  IN Denoiser -- inputs max (pass 1):             1.7475021
+  IN Denoiser -- grid_node_features max:         34.9723053
+  IN Denoiser -- global_norm_conditioning max:    1.4150469
+  IN Denoiser -- latent_mesh_nodes max:           7.0493221
+  IN Denoiser -- latent_grid_nodes max:           7.5895877
+
+  IN Denoiser -- inputs max (pass 2):             1.7475021
+  IN Denoiser -- grid_node_features max:         34.9723053
+  IN Denoiser -- global_norm_conditioning max:    1.3438096
+  IN Denoiser -- latent_mesh_nodes max:           7.0489311
+  IN Denoiser -- latent_grid_nodes max:           7.5880899
+
+  Final x 2m_temperature mean:                   -4.726866
+
+
+
+Original GenCast Inference
+Sampler - inputs 2m_temperature max:            1.7475021  
+aaa before first denoiser 2m_temperature mean: -7.1186113  
+
+IN Denoiser -- inputs max (pass 1):             1.7475021  
+IN Denoiser -- grid_node_features max:         34.9723053  
+IN Denoiser -- global_norm_conditioning max:    2.6927125  
+IN Denoiser -- latent_mesh_nodes max:           4.6428185  
+IN Denoiser -- latent_grid_nodes max:          67.7008057  
+
+IN Denoiser -- inputs max (pass 2):             1.7475021  
+IN Denoiser -- grid_node_features max:         34.9723053  
+IN Denoiser -- global_norm_conditioning max:    2.7125046  
+IN Denoiser -- latent_mesh_nodes max:           4.6405840  
+IN Denoiser -- latent_grid_nodes max:          67.8320160  
+
+Final x 2m_temperature mean:                   -4.96804 
+
+  '''
+
+    # In the pmapped case, profiling reveals that the predictions, forcings and
+    # inputs are all copied onto a single TPU, causing OOM. To avoid this
+    # we pull all of the input/output data off the devices. This will have
+    # some performance impact, but maximise the memory efficiency.
+    # TODO(aelkadi): Pmap `_get_next_inputs` when running under pmap, and
+    # remove the device_get.
+    if pmap_devices is not None:
+      predictions = jax.device_get(predictions)
+      current_forcings = jax.device_get(current_forcings)
+      current_inputs = jax.device_get(current_inputs)
+      # for readout, we iterate over the keys and device_get the values
+      for key in readouts.keys():
+        readouts[key] = jax.device_get(readouts[key])
+
+    
+    next_frame = xarray.merge([predictions, current_forcings])
+
+    next_inputs = _get_next_inputs(current_inputs, next_frame)
+
+
+    # Shift timedelta coordinates, so we don't recompile at every iteration.
+    next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
+    current_inputs = next_inputs
+
+    # At this point we can assign the actual targets time coordinates.
+    predictions = predictions.assign_coords(time=actual_target_time)
+
+    if output_datetime is not None:
+      predictions.coords["datetime"] = output_datetime.isel(
+          time=target_slice)
+      for key in readouts.keys():
+        readouts[key].coords["datetime"] = output_datetime.isel(
+          time=target_slice)
+
+    yield predictions, readouts
+    del predictions, readouts
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def prediction_readout_generator(
+#     predictor_fn: PredictorFn,
+#     rng: chex.PRNGKey,
+#     inputs: xarray.Dataset,
+#     targets_template: xarray.Dataset,
+#     forcings: xarray.Dataset,
+#     num_steps_per_chunk: int = 1,
+#     verbose: bool = False,
+#     pmap_devices: Optional[Sequence[jax.Device]] = None
+# ) -> Iterator[Tuple[xarray.Dataset, Dict[int, xarray.Dataset]]]:
+#     """Outputs a long trajectory by yielding chunked predictions with readout predictions."""
+
+#     # Create copies to avoid mutating inputs
+#     inputs = xarray.Dataset(inputs)
+#     targets_template = xarray.Dataset(targets_template)
+#     forcings = xarray.Dataset(forcings)
+
+#     if "datetime" in inputs.coords:
+#         del inputs.coords["datetime"]
+
+#     if "datetime" in targets_template.coords:
+#         output_datetime = targets_template.coords["datetime"]
+#         del targets_template.coords["datetime"]
+#     else:
+#         output_datetime = None
+
+#     if "datetime" in forcings.coords:
+#         del forcings.coords["datetime"]
+
+#     num_target_steps = targets_template.dims["time"]
+#     num_chunks, remainder = divmod(num_target_steps, num_steps_per_chunk)
+#     if remainder != 0:
+#         raise ValueError(
+#             f"The number of steps per chunk {num_steps_per_chunk} must "
+#             f"evenly divide the number of target steps {num_target_steps} ")
+
+#     if len(np.unique(np.diff(targets_template.coords["time"].data))) > 1:
+#         raise ValueError("The targets time coordinates must be evenly spaced")
+
+#     # Our template targets will always have a time axis corresponding for the
+#     # timedeltas for the first chunk.
+#     targets_chunk_time = targets_template.time.isel(
+#         time=slice(0, num_steps_per_chunk))
+
+#     current_inputs = inputs
+
+#     def split_rng_fn(rng):
+#         rng1, rng2 = jax.random.split(rng)
+#         return rng1, rng2
+
+#     if pmap_devices is not None:
+#         split_rng_fn = jax.pmap(split_rng_fn, devices=pmap_devices)
+
+#     for chunk_index in range(num_chunks):
+#         if verbose:
+#             logging.info("Chunk %d/%d", chunk_index, num_chunks)
+#             logging.flush()
+
+#         # Select targets for the time period that we are predicting for this chunk.
+#         target_offset = num_steps_per_chunk * chunk_index
+#         target_slice = slice(target_offset, target_offset + num_steps_per_chunk)
+#         current_targets_template = targets_template.isel(time=target_slice)
+
+#         # Store actual target time before replacing with chunk time
+#         actual_target_time = current_targets_template.coords["time"]
+        
+#         # Replace with chunk time for compilation consistency
+#         current_targets_template = current_targets_template.assign_coords(
+#             time=targets_chunk_time).compute()
+
+#         current_forcings = forcings.isel(time=target_slice)
+#         current_forcings = current_forcings.assign_coords(time=targets_chunk_time)
+#         current_forcings = current_forcings.compute()
+
+#         # Print time coordinates for debugging
+#         print(f"Current inputs time coords: {current_inputs.time.values}")
+#         print(f"Current targets time coords: {current_targets_template.time.values}")
+#         print(f"Current forcings time coords: {current_forcings.time.values}")
+
+
+
+#         rng, this_rng = split_rng_fn(rng)
+
+#         # Get both predictions and readouts
+#         predictions, readouts = predictor_fn(
+#             rng=this_rng,
+#             inputs=current_inputs,
+#             targets_template=current_targets_template,
+#             forcings=current_forcings)
+
+#         if pmap_devices is not None:
+#             predictions = jax.device_get(predictions)
+#             readouts = jax.device_get(readouts)
+#             current_forcings = jax.device_get(current_forcings)
+#             current_inputs = jax.device_get(current_inputs)
+
+#         # Use predictions as next inputs, just like original GenCast
+#         next_frame = xarray.merge([predictions, current_forcings])
+#         next_inputs = _get_next_inputs(current_inputs, next_frame)
+
+#         print(f"Next inputs time coords: {next_inputs.time.values}")
+
+#         # Shift timedelta coordinates, so we don't recompile at every iteration
+#         next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
+#         current_inputs = next_inputs
+
+#         print(f"Current inputs time coords: {current_inputs.time.values}")
+
+#         # Restore actual target time coordinates for predictions
+#         print(f"Predictions time coords before assignment: {predictions.time.values}")
+#         predictions = predictions.assign_coords(time=actual_target_time)
+#         print(f"Predictions time coords after assignment: {predictions.time.values}")
+
+#         # Restore actual target time coordinates for readouts
+#         for step in readouts:
+#             print(f"Readout step {step} time coords before assignment: {readouts[step].time.values}")
+#             readouts[step] = readouts[step].assign_coords(time=actual_target_time)
+#             print(f"Readout step {step} time coords after assignment: {readouts[step].time.values}")
+
+#         if output_datetime is not None:
+#             predictions.coords["datetime"] = output_datetime.isel(time=target_slice)
+#             for step in readouts:
+#                 readouts[step].coords["datetime"] = output_datetime.isel(time=target_slice)
+
+#         yield predictions, readouts
+
+
+'''
+ReadOut | Rollout Inference ReadOut
+'''

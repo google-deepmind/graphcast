@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 from graphcast import predictor_base as base
 import numpy as np
 import xarray
+import jax
 
 
 class NaNCleaner(base.Predictor):
@@ -36,12 +37,14 @@ class NaNCleaner(base.Predictor):
       var_to_clean: str,
       fill_value: xarray.Dataset,
       reintroduce_nans: bool = False,
+      ReadOut_flag: bool = False
   ):
     """Initializes the NaNCleaner."""
     self._predictor = predictor
     self._fill_value = fill_value[var_to_clean]
     self._var_to_clean = var_to_clean
     self._reintroduce_nans = reintroduce_nans
+    self._ReadOut_flag = ReadOut_flag
 
   def _clean(self, dataset: xarray.Dataset) -> xarray.Dataset:
     """Cleans the dataset of NaNs."""
@@ -99,6 +102,79 @@ class NaNCleaner(base.Predictor):
     return self._predictor.loss(
         inputs, targets, forcings, **kwargs
     )
+
+  def readout_train(
+      self,
+      inputs: xarray.Dataset,
+      targets: xarray.Dataset,
+      forcings: Optional[xarray.Dataset] = None,
+      **kwargs,
+  ) -> base.LossAndDiagnostics:
+    if self._var_to_clean in inputs.keys():
+      inputs = self._clean(inputs)
+    if self._var_to_clean in targets.keys():
+      targets = self._clean(targets)
+    if forcings and self._var_to_clean in forcings.keys():
+      forcings = self._clean(forcings)
+    # make 'sea_surface_temperature' in targets float32
+    targets['sea_surface_temperature'] = targets['sea_surface_temperature'].astype(np.float32)
+    inputs['sea_surface_temperature'] = inputs['sea_surface_temperature'].astype(np.float32)
+    return self._predictor.readout_train(
+        inputs, targets, forcings, **kwargs
+    )
+
+  def readout_inference_vis(
+      self,
+      inputs: xarray.Dataset,
+      targets_template: xarray.Dataset,
+      forcings: Optional[xarray.Dataset] = None,
+      **kwargs,
+  ) -> xarray.Dataset:
+    if self._reintroduce_nans:
+      # Copy inputs before cleaning so that we can reintroduce NaNs later.
+      original_inputs = inputs.copy()
+    if self._var_to_clean in inputs.keys():
+      inputs = self._clean(inputs)
+    if forcings and self._var_to_clean in forcings.keys():
+      forcings = self._clean(forcings)
+    predictions, all_readouts = self._predictor.readout_inference_vis(
+        inputs, targets_template, forcings, **kwargs
+    )
+    predictions = self._maybe_reintroduce_nans(original_inputs, predictions)
+    for i in all_readouts.keys():
+      all_readouts[i] = self._maybe_reintroduce_nans(original_inputs, all_readouts[i])
+
+    return predictions, all_readouts
+
+
+  def readout_guided_inference_vis(
+      self,
+      inputs: xarray.Dataset,
+      targets_template: xarray.Dataset,
+      forcings: Optional[xarray.Dataset] = None,
+      *,
+      guidance_cfg,
+      **kwargs,
+  ) -> xarray.Dataset:
+    if self._reintroduce_nans:
+      original_inputs = inputs.copy()
+    if self._var_to_clean in inputs.keys():
+      inputs = self._clean(inputs)
+    if forcings is not None and self._var_to_clean in forcings.keys():
+      forcings = self._clean(forcings)
+
+    predictions, all_readouts, loss_history = self._predictor.readout_guided_inference_vis(
+        inputs, targets_template, forcings, guidance_cfg=guidance_cfg, **kwargs
+    )
+
+    if self._reintroduce_nans:
+      predictions = self._maybe_reintroduce_nans(original_inputs, predictions)
+      for k in all_readouts.keys():
+        all_readouts[k] = self._maybe_reintroduce_nans(original_inputs, all_readouts[k])
+
+    return predictions, all_readouts, loss_history
+
+
 
   def loss_and_predictions(
       self,

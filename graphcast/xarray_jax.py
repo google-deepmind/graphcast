@@ -115,7 +115,7 @@ import xarray
 # leaves of pytrees, in order to ensure we can still use xarray datatypes as
 # internal pytree nodes in these cases.
 _WRAPPED_TYPES = (
-    jax.Array, jax.ShapeDtypeStruct, jax.stages.ArgInfo)
+    jax.Array, jax.ShapeDtypeStruct, jax.stages.ArgInfo, jax.core.Tracer)
 
 
 def Variable(dims, data, **kwargs) -> xarray.Variable:  # pylint:disable=invalid-name
@@ -364,7 +364,7 @@ def unwrap(value, require_jax=False):
   """Unwraps wrapped JAX arrays used in xarray, passing through other values."""
   if isinstance(value, JaxArrayWrapper):
     return value.jax_array
-  elif isinstance(value, jax.Array):
+  elif isinstance(value, (jax.Array, jax.core.Tracer)):
     return value
   elif require_jax:
     raise TypeError(f'Expected JAX array, found {type(value)}.')
@@ -441,7 +441,7 @@ class JaxArrayWrapper(np.lib.mixins.NDArrayOperatorsMixin):
 
   def __array_ufunc__(self, ufunc, method, *args, **kwargs):
     for x in args:
-      if not isinstance(x, (jax.typing.ArrayLike, type(self))):
+      if not isinstance(x, (jax.typing.ArrayLike, jax.core.Tracer, type(self))):
         return NotImplemented
     if method != '__call__':
       return NotImplemented

@@ -83,7 +83,7 @@ def get_day_progress(
     longitude: 1D array of longitudes at which day progress is computed.
 
   Returns:
-    2D array of day progress values normalized to be in the [0, 1) inverval
+    2D array of day progress values normalized to be in the [0, 1) interval
       for each time point at each longitude.
   """
 

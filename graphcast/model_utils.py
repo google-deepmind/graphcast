@@ -48,9 +48,9 @@ def get_graph_spatial_features(
     add_node_positions: Add unit norm absolute positions.
     add_node_latitude: Add a feature for latitude (cos(90 - lat))
         Note even if this is set to False, the model may be able to infer the
-        longitude from relative features, unless
+        latitude from relative features, unless
         `relative_latitude_local_coordinates` is also True, or if there is any
-        bias on the relative edge sizes for different longitudes.
+        bias on the relative edge sizes for different latitudes.
     add_node_longitude: Add features for longitude (cos(lon), sin(lon)).
         Note even if this is set to False, the model may be able to infer the
         longitude from relative features, unless
@@ -246,7 +246,7 @@ def get_relative_position_in_receiver_local_coordinates(
 
   The relative positions will be computed in a rotated space for a local
   coordinate system as defined by the receiver. The relative positions are
-  simply obtained by subtracting sender position minues receiver position in
+  simply obtained by subtracting sender position minus receiver position in
   that local coordinate system after the rotation in R^3.
 
   Args:
@@ -386,7 +386,7 @@ def get_rotation_matrices_to_local_coordinates(
     # We want to apply the polar rotation only, but we don't know the rotation
     # axis to apply a polar rotation. The simplest way to achieve this is to
     # first rotate all the way to longitude 0, then apply the polar rotation
-    # arond the y axis, and then rotate back to the original longitude.
+    # around the y axis, and then rotate back to the original longitude.
     return transform_.Rotation.from_euler(
         "zyz", np_.stack(
             [azimuthal_rotation, polar_rotation, -azimuthal_rotation]
@@ -562,7 +562,7 @@ def get_bipartite_relative_position_in_receiver_local_coordinates(
 
   The relative positions will be computed in a rotated space for a local
   coordinate system as defined by the receiver. The relative positions are
-  simply obtained by subtracting sender position minues receiver position in
+  simply obtained by subtracting sender position minus receiver position in
   that local coordinate system after the rotation in R^3.
 
   Args:

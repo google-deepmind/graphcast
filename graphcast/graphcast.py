@@ -21,7 +21,7 @@ It uses ideas similar to those in Keisler (2022):
 Reference:
   https://arxiv.org/pdf/2202.07575.pdf
 
-It assumes data across time and level is stacked, and operates only operates in
+It assumes data across time and level is stacked, and only operates in
 a 2D mesh over latitudes and longitudes.
 """
 
@@ -278,7 +278,7 @@ class GraphCast(predictor_base.Predictor):
 
     # Processor, which performs message passing on the multi-mesh.
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
-        embed_nodes=False,  # Node features already embdded by previous layers.
+        embed_nodes=False,  # Node features already embedded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
         node_latent_size=dict(mesh_nodes=model_config.latent_size),
         edge_latent_size=dict(mesh=model_config.latent_size),
@@ -302,9 +302,9 @@ class GraphCast(predictor_base.Predictor):
     # Decoder, which moves data from the mesh back into the grid with a single
     # message passing step.
     self._mesh2grid_gnn = deep_typed_graph_net.DeepTypedGraphNet(
-        # Require a specific node dimensionaly for the grid node outputs.
+        # Require a specific node dimensionality for the grid node outputs.
         node_output_size=dict(grid_nodes=num_outputs),
-        embed_nodes=False,  # Node features already embdded by previous layers.
+        embed_nodes=False,  # Node features already embedded by previous layers.
         embed_edges=True,  # Embed raw features of the mesh2grid edges.
         edge_latent_size=dict(mesh2grid=model_config.latent_size),
         node_latent_size=dict(
@@ -376,12 +376,12 @@ class GraphCast(predictor_base.Predictor):
     # [num_mesh_nodes, batch, latent_size]
     updated_latent_mesh_nodes = self._run_mesh_gnn(latent_mesh_nodes)
 
-    # Transfer data frome the mesh to the grid.
+    # Transfer data from the mesh to the grid.
     # [num_grid_nodes, batch, output_size]
     output_grid_nodes = self._run_mesh2grid_gnn(
         updated_latent_mesh_nodes, latent_grid_nodes)
 
-    # Conver output flat vectors for the grid nodes to the format of the output.
+    # Convert output flat vectors for the grid nodes to the format of the output.
     # [num_grid_nodes, batch, output_size] ->
     # xarray (batch, one time step, lat, lon, level, multiple vars)
     return self._grid_node_outputs_to_prediction(

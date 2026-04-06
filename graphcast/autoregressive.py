@@ -75,7 +75,7 @@ class Predictor(predictor_base.Predictor):
         particular, no noise is added to the predictions that are fed back
         auto-regressively. Defaults to not adding noise.
       gradient_checkpointing: If True, gradient checkpointing will be
-        used at each step of the computation to save on memory. Roughtly this
+        used at each step of the computation to save on memory. Roughly this
         should make the backwards pass two times more expensive, and the time
         per step counting the forward pass, should only increase by about 50%.
         Note this parameter will be ignored with a warning if the scan sequence

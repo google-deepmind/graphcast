@@ -56,7 +56,7 @@ def get_graph_spatial_features(
         longitude from relative features, unless
         `relative_longitude_local_coordinates` is also True, or if there is any
         bias on the relative edge sizes for different longitudes.
-    add_relative_positions: Whether to relative positions in R3 to the edges.
+    add_relative_positions: Whether to add relative positions in R3 to the edges.
     edge_normalization_factor: Allows explicitly controlling edge normalization.
         If None, defaults to max edge length. This supports using pre-trained
         model weights with a different graph structure to what it was trained.
@@ -254,9 +254,9 @@ def get_relative_position_in_receiver_local_coordinates(
     node_theta: [num_nodes] with azimuthal angles.
     senders: [num_edges] with indices.
     receivers: [num_edges] with indices.
-    latitude_local_coordinates: Whether to rotate edges such that in the
+    latitude_local_coordinates: Whether to rotate edges such that the
         positions are computed such that the receiver is always at latitude 0.
-    longitude_local_coordinates: Whether to rotate edges such that in the
+    longitude_local_coordinates: Whether to rotate edges such that the
         positions are computed such that the receiver is always at longitude 0.
     np_: Numpy library interface.
     transform_: scipy.transform library interface.
@@ -447,7 +447,7 @@ def get_bipartite_graph_spatial_features(
       from relative features, unless `relative_longitude_local_coordinates` is
       also True, or if there is any bias on the relative edge sizes for
       different longitudes.
-    add_relative_positions: Whether to relative positions in R3 to the edges.
+    add_relative_positions: Whether to add relative positions in R3 to the edges.
     edge_normalization_factor: Allows explicitly controlling edge normalization.
       If None, defaults to max edge length. This supports using pre-trained
       model weights with a different graph structure to what it was trained on.
@@ -569,12 +569,12 @@ def get_bipartite_relative_position_in_receiver_local_coordinates(
     senders_node_phi: [num_sender_nodes] with polar angles.
     senders_node_theta: [num_sender_nodes] with azimuthal angles.
     senders: [num_edges] with indices into sender nodes.
-    receivers_node_phi: [num_sender_nodes] with polar angles.
-    receivers_node_theta: [num_sender_nodes] with azimuthal angles.
+    receivers_node_phi: [num_receiver_nodes] with polar angles.
+    receivers_node_theta: [num_receiver_nodes] with azimuthal angles.
     receivers: [num_edges] with indices into receiver nodes.
-    latitude_local_coordinates: Whether to rotate edges such that in the
+    latitude_local_coordinates: Whether to rotate edges such that the
       positions are computed such that the receiver is always at latitude 0.
-    longitude_local_coordinates: Whether to rotate edges such that in the
+    longitude_local_coordinates: Whether to rotate edges such that the
       positions are computed such that the receiver is always at longitude 0.
     np_: Numpy library interface.
     transform_: scipy.transform library interface.

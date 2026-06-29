@@ -72,7 +72,7 @@ This document describes how to run `gencast_demo_cloud_vm.ipynb` through [Colabo
         ...
         denoiser_architecture_config = ckpt.denoiser_architecture_config
         denoiser_architecture_config.sparse_transformer_config.attention_type = "triblockdiag_mha"
-        denoiser_architecture_config.sparse_transformer_config.mask_type = "full
+        denoiser_architecture_config.sparse_transformer_config.mask_type = "full"
      ```
 
 **Skill comparison vs. TPU**
@@ -212,7 +212,7 @@ Summary:
 - Now that the zone of the TPU is known, create a bucket, where
   - `<bucket_name>` is as preferred
   - `<location>` is the zone used for the TPU, using the names listed as per https://cloud.google.com/storage/docs/locations#available-locations,
-    - E,g, `us-south1-a` → `US-SOUTH-1`
+    - E.g., `us-south1-a` → `US-SOUTH-1`
   ```
   gcloud storage buckets create gs://<bucket_name> --location <location>
   ```

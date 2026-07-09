@@ -229,3 +229,15 @@ Use of the third-party materials referred to above may be governed by separate t
 ## Contact
 
 For feedback and questions, contact us at gencast@google.com. Any information collected via email will be used in accordance with [Google's privacy policy](http://policies.google.com/privacy).
+
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on
+how to report bugs, suggest features, and submit pull requests.
+
+By participating, you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+---
+
+*[Mukller](https://github.com/Mukller)*

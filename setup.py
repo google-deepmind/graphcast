@@ -12,42 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Module setuptools script."""
+import setuptools
 
-from setuptools import setup
+description = "This is Google DeepMind's library to run WeatherNext models"
 
-description = (
-    "GraphCast: Learning skillful medium-range global weather forecasting"
-)
-
-setup(
-    name="graphcast",
-    version="0.2",
+setuptools.setup(
+    name="weathernext",
+    version="0.3.0",
     description=description,
     long_description=description,
     author="DeepMind",
     license="Apache License, Version 2.0",
-    keywords="GraphCast Weather Prediction",
-    url="https://github.com/deepmind/graphcast",
-    packages=["graphcast"],
+    keywords="WeatherNext",
+    url="https://github.com/google-deepmind/weathernext",
+    packages=setuptools.find_packages(),
+    package_data={
+        "weathernext.weathernext2": ["configs/*.json"],
+    },
     install_requires=[
-        "cartopy",
         "chex",
         "colabtools",
         "dask",
         "dinosaur-dycore",
         "dm-haiku",
         "dm-tree",
+        "gdm-xarray-jax @ git+https://github.com/google-deepmind/xarray_jax.git@v0.1.1",  # pylint: disable=line-too-long
+        "fiddle",
+        "h5netcdf",
         "jax",
         "jraph",
         "matplotlib",
         "numpy",
         "pandas",
+        "pyproj",
         "rtree",
         "scipy",
         "trimesh",
         "typing_extensions",
-        "xarray",
-        "xarray_tensorstore"
+        "xarray<=2026.2.0",
+        "xarray_tensorstore",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

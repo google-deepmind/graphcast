@@ -18,7 +18,7 @@ description = "This is Google DeepMind's library to run WeatherNext models"
 
 setuptools.setup(
     name="weathernext",
-    version="0.3.0",
+    version="0.3.1.dev",
     description=description,
     long_description=description,
     author="DeepMind",

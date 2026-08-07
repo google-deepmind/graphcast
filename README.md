@@ -2,7 +2,7 @@
 
 ## WeatherNext 2
 
-This repo contains the code for WeatherNext 2, the global, medium-range
+This repo contains the code for WeatherNext 2 (WN2), the global, medium-range
 atmospheric and cyclone forecasting model developed by Google DeepMind and
 Google Research.
 
@@ -11,11 +11,15 @@ It also contains code for prior generation models
 and
 [GenCast](https://deepmind.google/blog/gencast-predicts-weather-and-the-risks-of-extreme-conditions-with-sota-accuracy/).
 
-**Accessing Forecast Data Feeds** If you are interested in directly accessing
-daily data feeds of WN2 model outputs rather than running the model yourself, we
-provide them across multiple platforms (including Earth Engine, BigQuery, and
-Vertex AI). Learn more about how to access
-[here](https://developers.google.com/weathernext/guides/access-forecast).
+### Accessing Forecast Data Feeds
+If you are interested in directly accessing daily data feeds of WN2 model
+outputs rather than running the model yourself, we provide them across multiple
+platforms:
+
+*   [Google Cloud](https://developers.google.com/weathernext/guides/access-forecast)
+(including Earth Engine, BigQuery, and Vertex AI).
+*   [WeatherLab](https://deepmind.google.com/science/weatherlab) (including cyclone tracks).
+*   [OpenMeteo](https://open-meteo.com/en/docs/google-weathernext-api) (including an API and interactive builder).
 
 ### Learn More
 
@@ -195,9 +199,21 @@ official alerts, warnings or notices published by such agencies.
 
 ## Citations
 
-If you use WeatherNext 2 in your research, please cite our paper:
+If you use WeatherNext 2 in your research, please cite our papers:
 
 <!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
+
+```latex
+@article{Alet2026,
+  title={Operational Tropical Cyclone Forecasting with AI},
+  author={Alet, Ferran and Andersson, Tom R. and Price, Ilan and Markou, Stratis and El-Kadi, Andrew and Masters, Dominic and Li, Amy and Merchant, Samier and Williams, Natalie and Thornton, Gregory and MacKay, Ken and Graham, Olivia and Uddin, Akib and Gaiarin, Ben and Shah, Devaja and Kruse, Elinor and Hogsett, Wallace and Zelinsky, David and Cangialosi, John and Martinez, Jonathan and Franklin, James and DeMaria, Mark and Musgrave, Kate and Bain, Caroline L. and Titley, Helen and Stott, Jacklynn and Lam, Remi and Bell, Aaron and Komarek, Paul and Willson, Matthew and Sanchez-Gonzalez, Alvaro and Battaglia, Peter},
+  journal={Nature},
+  year={2026},
+  issn={1476-4687},
+  doi={10.1038/s41586-026-10953-2},
+  url={https://doi.org/10.1038/s41586-026-10953-2}
+}
+```
 
 ```latex
 @article{alet2025skillful,

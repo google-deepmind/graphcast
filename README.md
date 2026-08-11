@@ -152,7 +152,7 @@ xarray utilities. See the per-model READMEs for model-specific code.
 ### Training Data
 
 Full model training requires downloading the
-[ERA5](https://www.ecmwf.int/en/forecasts/datasets/reanalysis-datasets/era5)
+[ERA5](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5)
 dataset from [ECMWF](https://www.ecmwf.int/), best accessed as Zarr via
 [WeatherBench2](https://weatherbench2.readthedocs.io/en/latest/data-guide.html#era5).
 

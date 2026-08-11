@@ -125,7 +125,8 @@ Bucket](https://console.cloud.google.com/storage/browser/dm_graphcast).
 
 ### Installation
 
-> [!NOTE] This is research code provided as-is for the purpose of running and
+> [!NOTE]
+> This is research code provided as-is for the purpose of running and
 > experimenting with the published models. There are no guarantees of API
 > stability and future updates may introduce breaking changes without notice. We
 > recommend pinning to a specific release.
@@ -199,9 +200,11 @@ official alerts, warnings or notices published by such agencies.
 
 ## Citations
 
-If you use WeatherNext 2 in your research, please cite our papers:
+If you use any of the WeatherNext family of models in your research, please cite
+our papers:
 
 <!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
+**WeatherNext 2 or WeatherNext Cyclones**
 
 ```latex
 @article{Alet2026,
@@ -221,6 +224,36 @@ If you use WeatherNext 2 in your research, please cite our papers:
   author={Alet, Ferran and Price, Ilan and El-Kadi, Andrew and Masters, Dominic and Markou, Stratis and Andersson, Tom R and Stott, Jacklynn and Lam, Remi and Willson, Matthew and Sanchez-Gonzalez, Alvaro and Battaglia, Peter},
   journal={arXiv preprint arXiv:2506.10772},
   year={2025}
+}
+```
+
+**WeatherNext 1 Gen (GenCast)**
+
+```latex
+@article{price2024gencast,
+  title={Probabilistic weather forecasting with machine learning},
+  author={Price, Ilan and Sanchez-Gonzalez, Alvaro and Alet, Ferran and Andersson, Tom R and El-Kadi, Andrew and Masters, Dominic and Ewalds, Timo and Stott, Jacklynn and Mohamed, Shakir and Battaglia, Peter and Lam, Remi and Willson, Matthew},
+  journal={Nature},
+  volume={637},
+  number={8044},
+  year={2024},
+  publisher={Nature Publishing Group},
+  doi={10.1038/s41586-024-08252-9}
+}
+```
+
+**WeatherNext 1 Graph (GraphCast)**
+
+```latex
+@article{lam2023learning,
+  title={Learning skillful medium-range global weather forecasting},
+  author={Lam, Remi and Sanchez-Gonzalez, Alvaro and Willson, Matthew and Wirnsberger, Peter and Fortunato, Meire and Alet, Ferran and Ravuri, Suman and Ewalds, Timo and Eaton-Rosen, Zach and Hu, Weihua and others},
+  journal={Science},
+  volume={382},
+  number={6677},
+  pages={1416--1421},
+  year={2023},
+  publisher={American Association for the Advancement of Science}
 }
 ```
 

@@ -32,6 +32,7 @@ setuptools.setup(
     install_requires=[
         "chex",
         "colabtools",
+        "Cython",
         "dask",
         "dinosaur-dycore",
         "dm-haiku",
